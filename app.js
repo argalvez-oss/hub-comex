@@ -218,6 +218,17 @@
       if (!c) throw demoError(404);
       return { value: c.fotos.map(f => ({ id: f.id, name: f.name, file: {}, thumbnails: f.url ? [{ medium: { url: f.url } }] : [] })) };
     }
+    if ((m = /^\/me\/drive\/items\/([^/:?]+)$/.exec(ruta)) && metodo === 'DELETE') {
+      for (const c of demo.carpetas.values()) {
+        const i = c.fotos.findIndex(f => f.id === m[1]);
+        if (i < 0) continue;
+        c.fotos.splice(i, 1);
+        await idb.guardar('demofoto.' + m[1], null);
+        demoGuardar();
+        return null;
+      }
+      throw demoError(404);
+    }
     if ((m = /^\/me\/drive\/items\/([^/:?]+)\?/.exec(ruta))) {
       const c = demo.carpetas.get(m[1]);
       if (!c) throw demoError(404);
@@ -553,15 +564,23 @@
     const abierto = d.estado === 'proceso';
     const pend = pendientesDe(d.id);
     const fotoNum = name => { const m = /(\d+)/.exec(name); return m ? m[1] : ''; };
+    // Botón X para eliminar (solo con el despacho abierto); al tocarlo pide confirmar sobre la misma foto.
+    const quitar = (id, tipo, nombre) => {
+      if (!abierto || id === subiendoId) return '';
+      if (st.borrar === id) return `<div class="confirm"><span>¿Eliminar foto ${esc(fotoNum(nombre))}?</span>
+        <button class="si" data-act="borrarfoto" data-id="${esc(id)}" data-tipo="${tipo}" ${st.ocupado ? 'disabled' : ''}>Eliminar</button>
+        <button class="no" data-act="noborrar">Cancelar</button></div>`;
+      return `<button class="del" data-act="preborrar" data-id="${esc(id)}" aria-label="Eliminar foto ${esc(fotoNum(nombre))}">${ic('x')}</button>`;
+    };
     const tilesNube = vista.nube.slice().reverse().map(f => {
       const src = recientes.get(f.name) || f.thumb;
-      return `<div class="tile">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span></div>`;
+      return `<div class="tile">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${quitar(f.id, 'nube', f.name)}</div>`;
     });
     const tilesCola = pend.slice().reverse().map(x => {
       const badge = x.error ? `<span class="st err" title="No se pudo subir">${ic('alert')}</span>`
         : x.id === subiendoId ? `<span class="st up" title="Subiendo">${ic('spin')}</span>`
         : `<span class="st wait" title="Esperando">${ic('clock')}</span>`;
-      return `<div class="tile pend"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}</div>`;
+      return `<div class="tile pend"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${quitar(x.id, 'cola', x.archivo)}</div>`;
     });
     const tiles = tilesCola.concat(tilesNube);
     return `<main class="wrap">
@@ -681,6 +700,7 @@
   // ---------- Vista de un despacho ----------
   async function cargarVista(id) {
     vista = { id, nube: [], cargando: true, error: null };
+    st.borrar = null;
     render();
     try {
       const r = await graph(`/me/drive/items/${id}/children?$select=id,name,file&$expand=thumbnails&$top=999`);
@@ -788,6 +808,33 @@
         break;
       }
       case 'recargarvista': cargarVista(vista.id); break;
+      case 'preborrar': st.borrar = b.dataset.id; render(); break;
+      case 'noborrar': st.borrar = null; render(); break;
+      case 'borrarfoto': {
+        const id = b.dataset.id;
+        if (b.dataset.tipo === 'cola') {
+          if (id === subiendoId) { toast('Esa foto se está subiendo; espera un momento.'); break; }
+          await idb.quitar(id);
+          urlsCola.delete(id);
+          await refrescarCola();
+          st.borrar = null; render();
+          toast('Foto eliminada');
+          break;
+        }
+        st.ocupado = true; render();
+        try {
+          await graph(`/me/drive/items/${id}`, { method: 'DELETE' });
+          vista.nube = vista.nube.filter(f => f.id !== id);
+          const n = vista.nube.length;
+          cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); if (x) x.fotos = n; }).catch(() => {});
+          toast(DEMO ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
+        } catch (err) {
+          toast(err.status === 404 ? 'Esa foto ya no estaba en la carpeta.' : errorAMensaje(err, 'eliminar la foto'));
+          if (err.status === 404) vista.nube = vista.nube.filter(f => f.id !== id);
+        }
+        st.ocupado = false; st.borrar = null; render();
+        break;
+      }
       case 'cerrar': {
         st.ocupado = true; render();
         try {
