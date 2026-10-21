@@ -13,8 +13,15 @@
   const GRAPH = 'https://graph.microsoft.com/v1.0';
   const REGISTRO = `/me/drive/root:/${encodeURIComponent(CFG.carpetaRaiz || 'Despachos')}/_registro-hub-comex.json`;
   const LIMITE_SIMPLE = 4 * 1024 * 1024; // Graph acepta PUT directo hasta 4 MB
-  // Modo demostración (…/hub-comex/#demo): sin Microsoft; carpetas y fotos simuladas en el navegador.
-  const DEMO = location.hash === '#demo' || window.HUB_DEMO === true;
+  // Modo prueba (config modo: 'prueba', o …/#demo): sin Microsoft. Se elige Ventas o Soporte al ingresar
+  // y los despachos y fotos se guardan solo en este dispositivo.
+  const DEMO = CFG.modo !== 'microsoft' || location.hash === '#demo' || window.HUB_DEMO === true;
+  const DEMO_CUENTAS = {
+    ventas: { username: 'ventas-sales@healthyfood.com.ec', name: 'Ventas' },
+    soporte: { username: 'notificaciones@healthyfood.com.ec', name: 'Soporte' },
+    otro: { username: 'otro.usuario@healthyfood.com.ec', name: 'Otro usuario' }
+  };
+  const SESION_DEMO = 'hc.demo.sesion';
 
   // ---------- Utilidades ----------
   const ICONS = {
@@ -142,7 +149,7 @@
   const demo = { carpetas: new Map(), raiz: null, registro: null, n: 0 };
   function demoError(status) { const e = new Error('Demo ' + status); e.status = status; return e; }
   function demoCarpeta(nombre, padre) {
-    const id = 'demo' + (++demo.n);
+    const id = 'demo-' + uid() + (++demo.n);
     const hermanos = padre ? [...demo.carpetas.values()].filter(c => c.padre === padre).map(c => c.name) : [];
     let name = nombre, k = 1;
     while (hermanos.includes(name)) name = `${nombre} ${k++}`;
@@ -161,23 +168,49 @@
     });
     demo.registro = JSON.stringify({ despachos });
   }
+  // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
+  const demoClave = () => 'demo.datos.' + cuenta.username;
+  function demoGuardar() {
+    cache.guardar(demoClave(), {
+      n: demo.n, raiz: demo.raiz, registro: demo.registro,
+      carpetas: [...demo.carpetas.values()].map(c => ({ id: c.id, name: c.name, padre: c.padre, fotos: c.fotos.map(f => ({ id: f.id, name: f.name })) }))
+    });
+  }
+  async function demoCargar() {
+    const d = cache.leer(demoClave());
+    if (!d) { demoSemilla(); demoGuardar(); return; }
+    Object.assign(demo, { n: d.n, raiz: d.raiz, registro: d.registro, carpetas: new Map() });
+    for (const c of d.carpetas) {
+      for (const f of c.fotos) {
+        const blob = await idb.leer('demofoto.' + f.id).catch(() => null);
+        if (blob) f.url = URL.createObjectURL(blob);
+      }
+      demo.carpetas.set(c.id, c);
+    }
+  }
   async function demoGraph(ruta, op) {
     await new Promise(r => setTimeout(r, 250 + Math.random() * 500));
     if (!navigator.onLine) throw new SinSenal();
     const metodo = op.method || 'GET';
     let m;
     if (ruta.startsWith(REGISTRO)) {
-      if (metodo === 'PUT') { demo.registro = op.body; return {}; }
+      if (metodo === 'PUT') { demo.registro = op.body; demoGuardar(); return {}; }
       if (!demo.registro) throw demoError(404);
       return { '@microsoft.graph.downloadUrl': 'data:application/json,' + encodeURIComponent(demo.registro) };
     }
     if (ruta.startsWith('/me/drive/root:/')) return { id: demo.raiz };
-    if ((m = /^\/me\/drive\/items\/([^/:?]+)\/children$/.exec(ruta)) && metodo === 'POST') return demoCarpeta(op.json.name, m[1]);
+    if ((m = /^\/me\/drive\/items\/([^/:?]+)\/children$/.exec(ruta)) && metodo === 'POST') {
+      const c = demoCarpeta(op.json.name, m[1]);
+      demoGuardar();
+      return c;
+    }
     if ((m = /^\/me\/drive\/items\/([^/:?]+):\/([^:]+):\/content/.exec(ruta))) {
       const c = demo.carpetas.get(m[1]);
       if (!c) throw demoError(404);
       const f = { id: c.id + '-' + c.fotos.length + '-' + Date.now(), name: decodeURIComponent(m[2]), url: URL.createObjectURL(op.body) };
+      await idb.guardar('demofoto.' + f.id, op.body);
       c.fotos.push(f);
+      demoGuardar();
       return { id: f.id, name: f.name };
     }
     if ((m = /^\/me\/drive\/items\/([^/:?]+)\/children\?/.exec(ruta))) {
@@ -402,6 +435,12 @@
       <div class="mark">HC</div>
       <h1>Hub Comex</h1>
       <button class="btn primary big block" data-act="ingresar">${ic('lock')}Iniciar sesión</button>
+      ${DEMO && st.opcionesDemo ? `<div class="demo-box">
+        <span class="eyebrow">Elige con qué cuenta entrar</span>
+        <button class="btn" data-act="demologin" data-u="ventas">Ventas<span>uso normal</span></button>
+        <button class="btn" data-act="demologin" data-u="soporte">Soporte<span>pruebas</span></button>
+        <button class="btn" data-act="demologin" data-u="otro">Otro correo<span>sin acceso</span></button>
+      </div>` : ''}
     </section></main>`;
   }
   function vSinAcceso() {
@@ -455,7 +494,7 @@
     return `<main class="wrap">
       <div class="greet"><h1>${saludo()},<br>${st.rol === 'soporte' ? 'Soporte' : 'equipo de Ventas'}</h1>
         <p>${hoy.toLocaleDateString('es-EC', { weekday: 'long', day: 'numeric', month: 'long' })} · ${delMes.length} ${delMes.length === 1 ? 'despacho' : 'despachos'} este mes</p></div>
-      ${DEMO ? `<div class="note info">${ic('info')}<span><b>Modo demostración.</b> Funciona igual que la app real, pero las carpetas y fotos no se guardan en OneDrive y se borran al recargar la página.</span></div>` : ''}
+      ${DEMO ? `<div class="note info">${ic('info')}<span><b>Versión de prueba.</b> Los despachos y fotos se guardan solo en este dispositivo; todavía no se suben a OneDrive.</span></div>` : ''}
       ${st.rol === 'soporte' ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
       ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo a OneDrive…'}</span></div>` : ''}
       <button class="cta" data-act="ir" data-v="nuevo"><span class="plus">${ic('plus')}</span><span><b>Nuevo despacho</b><small>Ponle nombre y empieza a tomar fotos</small></span></button>
@@ -498,7 +537,7 @@
     let cls = '', icon = 'cloud', linea, ayuda;
     if (vista.cargando && !total) { linea = 'Revisando fotos en OneDrive…'; ayuda = ''; }
     else if (!total) { linea = 'Aún no hay fotos'; ayuda = 'Cada foto que aceptes se sube sola a la carpeta.'; }
-    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} de ${total} fotos subidas`; ayuda = 'Todas las fotos ya están en OneDrive.'; }
+    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} de ${total} fotos subidas`; ayuda = DEMO ? 'Todas las fotos están guardadas.' : 'Todas las fotos ya están en OneDrive.'; }
     else if (sinSenal) { cls = 'off'; icon = 'nosignal'; linea = `${subidas} de ${total} fotos subidas`; ayuda = `<b>Sin señal.</b> ${esperando} ${esperando === 1 ? 'foto espera' : 'fotos esperan'} en el celular y se ${esperando === 1 ? 'subirá' : 'subirán'} solas cuando vuelva la conexión. Puedes seguir tomando fotos.`; }
     else { cls = 'going'; icon = 'cloud'; linea = `${subidas} de ${total} fotos subidas`; ayuda = 'Subiendo en segundo plano. Puedes seguir tomando fotos; no cierres la app hasta que terminen.'; }
     return `<div class="upbox ${cls}">
@@ -684,9 +723,12 @@
     if (!b) return;
     const d = buscar(vista.id);
     switch (b.dataset.act) {
-      case 'ingresar': ingresar(); break;
+      case 'ingresar':
+        if (DEMO) { st.opcionesDemo = true; render(); } else ingresar();
+        break;
+      case 'demologin': iniciarDemo(b.dataset.u); break;
       case 'salir':
-        if (DEMO) { location.hash = ''; location.reload(); } else salir();
+        if (DEMO) { try { localStorage.removeItem(SESION_DEMO); } catch (_) {} location.reload(); } else salir();
         break;
       case 'recargar': location.reload(); break;
       case 'menu': st.menu = true; render(); break;
@@ -792,15 +834,25 @@
   });
 
   // ---------- Arranque ----------
+  async function iniciarDemo(clave) {
+    cuenta = DEMO_CUENTAS[clave];
+    if (!cuenta) { ir('ingreso'); return; }
+    if (clave === 'otro') { ir('sinacceso'); return; }
+    try { localStorage.setItem(SESION_DEMO, clave); } catch (_) {}
+    st.rol = clave;
+    await demoCargar();
+    await cargarRegistro();
+    await refrescarCola();
+    ir('home');
+    procesarCola();
+  }
+
   async function arrancar() {
     if (DEMO) {
-      cuenta = { username: 'demo', name: 'Demostración' };
-      st.rol = 'ventas';
-      for (const x of await idb.cola()) if (x.cuenta === 'demo') await idb.quitar(x.id);
-      demoSemilla();
-      await cargarRegistro();
-      await refrescarCola();
-      ir('home');
+      let guardada = null;
+      try { guardada = localStorage.getItem(SESION_DEMO); } catch (_) {}
+      if (guardada && DEMO_CUENTAS[guardada]) await iniciarDemo(guardada);
+      else ir('ingreso');
       return;
     }
     if (!window.msal) { ir('falla', { error: 'No se pudo cargar el inicio de sesión de Microsoft. Revisa la conexión a internet.' }); return; }

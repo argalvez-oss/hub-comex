@@ -71,6 +71,9 @@ main.wrap { padding-top: 20px; padding-bottom: calc(110px + env(safe-area-inset-
 .login .mark { width: 56px; height: 56px; font-size: 24px; border-radius: 16px; }
 .login .mark.bad { background: var(--danger); }
 .login h1 { font-size: 34px; }
+.demo-box { border: 1px dashed var(--line); border-radius: var(--r); padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
+.demo-box .btn { justify-content: flex-start; }
+.demo-box .btn span { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 13px; }
 .login code { font-family: var(--f-mono); font-size: 13px; overflow-wrap: anywhere; }
 
 /* Inicio */

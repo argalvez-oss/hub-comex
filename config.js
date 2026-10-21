@@ -1,6 +1,10 @@
 // Configuración de Hub Comex.
 // Completar antes de publicar (ver README.md, sección "Configuración en Azure").
 window.HUB_CONFIG = {
+  // 'prueba': se elige Ventas o Soporte al ingresar y todo se guarda solo en el dispositivo (sin Microsoft).
+  // 'microsoft': ingreso con la cuenta de Microsoft y fotos en OneDrive (requiere los permisos aprobados).
+  modo: 'prueba',
+
   // Registro de la app en Microsoft Entra ID (Azure) → "Id. de aplicación (cliente)".
   // Registro propio "Hub Comex". PENDIENTE: un administrador debe aprobar sus permisos.
   // Alternativa sin administrador: usar el id de "Hub Recepción" (ya tiene aprobado Sites.ReadWrite.All),
