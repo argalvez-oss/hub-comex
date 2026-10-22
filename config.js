@@ -23,6 +23,22 @@ window.HUB_CONFIG = {
     'notificaciones@healthyfood.com.ec': 'soporte'
   },
 
-  // Carpeta del OneDrive donde se crean las carpetas de cada despacho.
-  carpetaRaiz: 'Despachos'
+  // Carpeta del OneDrive donde va todo: adentro quedan "Despachos" y "Traslados", con una carpeta por registro.
+  carpetaRaiz: 'Hub Comex',
+
+  // Listas para elegir al llenar los datos (además se puede escribir). Aquí se cargará la base de datos;
+  // mientras tanto, la app sugiere lo ya escrito en registros anteriores.
+  catalogos: {
+    cliente: [],
+    destino: [],
+    lugarCarga: [],
+    pedido: []
+  },
+
+  // Datos del encabezado del informe en Word (los asigna Calidad / el sistema de gestión).
+  informe: {
+    codigo: 'HF-LOG-___',
+    revision: '___',
+    empresa: 'Healthy Food Marcalman Ecuador S.A.S.'
+  }
 };

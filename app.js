@@ -1,9 +1,11 @@
-/* Hub Comex — app de Ventas para fotografiar despachos y guardarlos en OneDrive.
+/* Hub Comex — app de Ventas para registrar despachos y traslados con fotos y generar su informe en Word.
  *
- * - Ingreso: Microsoft (MSAL). La sesión queda guardada en el dispositivo.
- * - Fotos: OneDrive de la cuenta que ingresa → /<carpetaRaiz>/<AAAA-MM-DD - nombre>/Foto_001.jpg
+ * - Ingreso: Microsoft (MSAL) o modo prueba (se elige Ventas / Soporte). La sesión queda guardada en el dispositivo.
+ * - Fotos: OneDrive → /<carpetaRaiz>/<Despachos|Traslados>/<AAAA-MM-DD - nombre>/Foto_001.jpg
  * - Cola de subida: IndexedDB. Si no hay señal, las fotos esperan en el celular.
- * - Registro de despachos: archivo JSON dentro de la carpeta raíz (/<carpetaRaiz>/_registro-hub-comex.json).
+ * - Registro: /<carpetaRaiz>/_registro-hub-comex.json (despachos y traslados, cada uno con su tipo).
+ * - Datos e inspección: se guardan primero en el dispositivo y se sincronizan cuando hay señal.
+ * - Informe: informe.js arma el .docx con la librería "docx" (se carga solo al descargar el primer informe).
  */
 (function () {
   'use strict';
@@ -11,10 +13,13 @@
   const CFG = window.HUB_CONFIG || {};
   const SCOPES = CFG.permisos || ['User.Read', 'Files.ReadWrite'];
   const GRAPH = 'https://graph.microsoft.com/v1.0';
-  const REGISTRO = `/me/drive/root:/${encodeURIComponent(CFG.carpetaRaiz || 'Despachos')}/_registro-hub-comex.json`;
+  const RAIZ = CFG.carpetaRaiz || 'Hub Comex';
+  const REGISTRO = `/me/drive/root:/${encodeURIComponent(RAIZ)}/_registro-hub-comex.json`;
+  const DOCX_URL = 'https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js';
   const LIMITE_SIMPLE = 4 * 1024 * 1024; // Graph acepta PUT directo hasta 4 MB
+  const ES_FOTO = /\.(jpe?g|png|heic|heif|webp)$/i;
   // Modo prueba (config modo: 'prueba', o …/#demo): sin Microsoft. Se elige Ventas o Soporte al ingresar
-  // y los despachos y fotos se guardan solo en este dispositivo.
+  // y los registros y fotos se guardan solo en este dispositivo.
   const DEMO = CFG.modo !== 'microsoft' || location.hash === '#demo' || window.HUB_DEMO === true;
   const DEMO_CUENTAS = {
     ventas: { username: 'ventas-sales@healthyfood.com.ec', name: 'Ventas' },
@@ -22,6 +27,23 @@
     otro: { username: 'otro.usuario@healthyfood.com.ec', name: 'Otro usuario' }
   };
   const SESION_DEMO = 'hc.demo.sesion';
+
+  const TIPOS = {
+    despacho: { plural: 'Despachos', uno: 'despacho', Uno: 'Despacho', carpeta: 'Despachos', ej: 'Ej. Pulpa mango Goya contenedor C7' },
+    traslado: { plural: 'Traslados', uno: 'traslado', Uno: 'Traslado', carpeta: 'Traslados', ej: 'Ej. Pulpa maracuyá a bodega Guayaquil' }
+  };
+  const T = d => TIPOS[(d && d.tipo) || d] || TIPOS.despacho;
+  const CAMPOS = [
+    ['cliente', 'Cliente', 'Ej. Goya Foods'],
+    ['destino', 'Destino', 'Ej. Jersey City, EE. UU.'],
+    ['lugarCarga', 'Lugar de carga', 'Ej. Planta Quevedo'],
+    ['pedido', 'Pedido / OC', 'Ej. OC-2026-0418']
+  ];
+  const INSPECCION = (window.HCInforme && window.HCInforme.INSPECCION) || [
+    ['exterior', 'Exterior, puertas y estructura'], ['interior', 'Interior limpio, seco y sin olores'],
+    ['piso', 'Piso, paredes y techo íntegros'], ['refrigeracion', 'Refrigeración operativa'],
+    ['llantas', 'Llantas, luces y elementos de seguridad'], ['apta', 'Unidad apta para carga de alimentos']
+  ];
 
   // ---------- Utilidades ----------
   const ICONS = {
@@ -32,8 +54,11 @@
     ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
     search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
     home: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/>',
-    list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+    truck: '<path d="M2 6h11v10H2zM13 9h4.5l3.5 3.5V16h-8"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+    swap: '<path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/>',
+    doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
     back: '<path d="M15 18l-6-6 6-6"/>',
+    chev: '<path d="m9 6 6 6-6 6"/>',
     check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
     x: '<path d="M6 6l12 12M18 6 6 18"/>',
     cloud: '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/><path d="m9.5 13.5 2.5-2.5 2.5 2.5M12 11v5"/>',
@@ -67,7 +92,7 @@
 
   class SinSenal extends Error {}
 
-  // ---------- Almacenamiento local (cola de fotos) ----------
+  // ---------- Almacenamiento local ----------
   const idb = (() => {
     let abierto;
     const abrir = () => abierto || (abierto = new Promise((res, rej) => {
@@ -89,7 +114,8 @@
 
   const cache = {
     leer(k) { try { return JSON.parse(localStorage.getItem('hc.' + k)); } catch (_) { return null; } },
-    guardar(k, v) { try { localStorage.setItem('hc.' + k, JSON.stringify(v)); } catch (_) {} }
+    guardar(k, v) { try { localStorage.setItem('hc.' + k, JSON.stringify(v)); } catch (_) {} },
+    quitar(k) { try { localStorage.removeItem('hc.' + k); } catch (_) {} }
   };
 
   // ---------- Sesión Microsoft ----------
@@ -145,41 +171,61 @@
     return op.raw ? r : r.json();
   }
 
-  // ---------- OneDrive simulado (solo modo demostración) ----------
-  const demo = { carpetas: new Map(), raiz: null, registro: null, n: 0 };
+  // ---------- OneDrive simulado (solo modo prueba) ----------
+  const demo = { carpetas: new Map(), registro: null, n: 0 };
   function demoError(status) { const e = new Error('Demo ' + status); e.status = status; return e; }
   function demoCarpeta(nombre, padre) {
     const id = 'demo-' + uid() + (++demo.n);
-    const hermanos = padre ? [...demo.carpetas.values()].filter(c => c.padre === padre).map(c => c.name) : [];
+    const hermanos = [...demo.carpetas.values()].filter(c => c.padre === padre).map(c => c.name);
     let name = nombre, k = 1;
     while (hermanos.includes(name)) name = `${nombre} ${k++}`;
     demo.carpetas.set(id, { id, name, padre, fotos: [] });
     return { id, name, webUrl: '#' };
   }
+  function demoBuscarRuta(ruta) {
+    let padre = null, c;
+    for (const parte of ruta.split('/').filter(Boolean)) {
+      c = [...demo.carpetas.values()].find(x => x.padre === padre && x.name === parte);
+      if (!c) return null;
+      padre = c.id;
+    }
+    return c;
+  }
   function demoSemilla() {
-    demo.raiz = demoCarpeta(CFG.carpetaRaiz || 'Despachos', null).id;
-    const ejemplos = [['Pulpa mango Goya contenedor C6', 3, 38], ['Puré de banano orgánico contenedor B12', 6, 41],
-      ['Pulpa maracuyá contenedor M3', 11, 29], ['Pulpa guanábana Goya contenedor G4', 18, 33]];
-    const despachos = ejemplos.map(([nombre, dias, fotos]) => {
+    const raiz = demoCarpeta(RAIZ, null).id;
+    const sub = { despacho: demoCarpeta('Despachos', raiz).id, traslado: demoCarpeta('Traslados', raiz).id };
+    const si = { v: 'si' };
+    const ejemplos = [
+      ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, 'Goya Foods Inc.', 'Jersey City, EE. UU.'],
+      ['despacho', 'Puré de banano orgánico contenedor B12', 6, 41, 'Hipp GmbH', 'Hamburgo, Alemania'],
+      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, '', 'Bodega Guayaquil'],
+      ['despacho', 'Pulpa guanábana Goya contenedor G4', 18, 33, 'Goya Foods Inc.', 'Miami, EE. UU.']
+    ];
+    const lista = ejemplos.map(([tipo, nombre, dias, fotos, cliente, destino]) => {
       const fecha = new Date(Date.now() - dias * 864e5);
-      const c = demoCarpeta(nombreCarpeta(nombre, fecha).nombre, demo.raiz);
+      const fin = new Date(fecha.getTime() + 3 * 36e5);
+      const c = demoCarpeta(nombreCarpeta(nombre, fecha).nombre, sub[tipo]);
       demo.carpetas.get(c.id).fotos = Array.from({ length: fotos }, (_, i) => ({ id: c.id + '-' + i, name: `Foto_${pad3(i + 1)}.jpg` }));
-      return { id: c.id, nombre, carpeta: c.name, webUrl: '#', fecha: fecha.toISOString(), estado: 'cerrado', cerrado: fecha.toISOString(), fotos };
+      return {
+        id: c.id, tipo, nombre, carpeta: c.name, webUrl: '#', fecha: fecha.toISOString(), estado: 'cerrado', cerrado: fin.toISOString(), fotos,
+        cliente, destino, lugarCarga: 'Planta Quevedo', pedido: '',
+        inspeccion: { exterior: si, interior: si, piso: si, refrigeracion: si, llantas: si, apta: si }
+      };
     });
-    demo.registro = JSON.stringify({ despachos });
+    demo.registro = JSON.stringify({ despachos: lista });
   }
   // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
-  const demoClave = () => 'demo.datos.' + cuenta.username;
+  const demoClave = () => 'demo.datos.v2.' + cuenta.username;
   function demoGuardar() {
     cache.guardar(demoClave(), {
-      n: demo.n, raiz: demo.raiz, registro: demo.registro,
+      n: demo.n, registro: demo.registro,
       carpetas: [...demo.carpetas.values()].map(c => ({ id: c.id, name: c.name, padre: c.padre, fotos: c.fotos.map(f => ({ id: f.id, name: f.name })) }))
     });
   }
   async function demoCargar() {
     const d = cache.leer(demoClave());
-    if (!d) { demoSemilla(); demoGuardar(); return; }
-    Object.assign(demo, { n: d.n, raiz: d.raiz, registro: d.registro, carpetas: new Map() });
+    if (!d) { demo.carpetas = new Map(); demoSemilla(); demoGuardar(); return; }
+    Object.assign(demo, { n: d.n, registro: d.registro, carpetas: new Map() });
     for (const c of d.carpetas) {
       for (const f of c.fotos) {
         const blob = await idb.leer('demofoto.' + f.id).catch(() => null);
@@ -189,7 +235,7 @@
     }
   }
   async function demoGraph(ruta, op) {
-    await new Promise(r => setTimeout(r, 250 + Math.random() * 500));
+    await new Promise(r => setTimeout(r, 200 + Math.random() * 400));
     if (!navigator.onLine) throw new SinSenal();
     const metodo = op.method || 'GET';
     let m;
@@ -198,7 +244,12 @@
       if (!demo.registro) throw demoError(404);
       return { '@microsoft.graph.downloadUrl': 'data:application/json,' + encodeURIComponent(demo.registro) };
     }
-    if (ruta.startsWith('/me/drive/root:/')) return { id: demo.raiz };
+    if ((m = /^\/me\/drive\/root:\/(.+)$/.exec(ruta))) {
+      const c = demoBuscarRuta(decodeURIComponent(m[1]));
+      if (!c) throw demoError(404);
+      return { id: c.id };
+    }
+    if (ruta === '/me/drive/root/children' && metodo === 'POST') { const c = demoCarpeta(op.json.name, null); demoGuardar(); return c; }
     if ((m = /^\/me\/drive\/items\/([^/:?]+)\/children$/.exec(ruta)) && metodo === 'POST') {
       const c = demoCarpeta(op.json.name, m[1]);
       demoGuardar();
@@ -237,8 +288,26 @@
     throw demoError(400);
   }
 
-  // ---------- Registro de despachos ----------
+  // ---------- Registro (despachos y traslados) ----------
   let registro = { despachos: [] };
+  const clavePend = () => 'pendientes.' + cuenta.username;
+
+  // Une cambios de datos/inspección sobre un registro (la inspección se mezcla punto por punto).
+  function mezclar(obj, cambio) {
+    for (const k of Object.keys(cambio)) {
+      if (k === 'inspeccion') {
+        obj.inspeccion = obj.inspeccion || {};
+        for (const p of Object.keys(cambio.inspeccion)) obj.inspeccion[p] = { ...(obj.inspeccion[p] || {}), ...cambio.inspeccion[p] };
+      } else obj[k] = cambio[k];
+    }
+    return obj;
+  }
+  function aplicarPendientes(data) {
+    const pend = cache.leer(clavePend()) || {};
+    for (const id of Object.keys(pend)) { const x = data.despachos.find(y => y.id === id); if (x) mezclar(x, pend[id]); }
+    return data;
+  }
+
   async function leerRegistro() {
     let data;
     try {
@@ -253,52 +322,84 @@
       data = { despachos: [] };
     }
     if (!Array.isArray(data.despachos)) data.despachos = [];
+    data.despachos.forEach(x => { if (!x.tipo) x.tipo = 'despacho'; });
     return data;
   }
   async function cargarRegistro() {
-    registro = await leerRegistro();
+    registro = aplicarPendientes(await leerRegistro());
     cache.guardar('registro.' + cuenta.username, registro);
     return registro;
   }
-  // Lee lo último de OneDrive, aplica el cambio y lo guarda (evita pisar cambios hechos desde otro equipo).
+  // Lee lo último de OneDrive, aplica los cambios pendientes y el cambio pedido, y lo guarda.
   async function cambiarRegistro(cambio) {
-    const data = await leerRegistro();
+    const pendAntes = JSON.stringify(cache.leer(clavePend()) || {});
+    const data = aplicarPendientes(await leerRegistro());
     cambio(data);
     await graph(REGISTRO + ':/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 1) });
-    registro = data;
+    if (JSON.stringify(cache.leer(clavePend()) || {}) === pendAntes) cache.quitar(clavePend());
+    registro = aplicarPendientes(data);
     cache.guardar('registro.' + cuenta.username, registro);
   }
   const buscar = id => registro.despachos.find(d => d.id === id);
 
-  let idRaiz = null;
-  async function carpetaRaiz() {
-    if (idRaiz) return idRaiz;
-    try {
-      idRaiz = (await graph(`/me/drive/root:/${encodeURIComponent(CFG.carpetaRaiz)}`)).id;
-    } catch (e) {
-      if (e.status !== 404) throw e;
-      idRaiz = (await graph('/me/drive/root/children', { method: 'POST', json: { name: CFG.carpetaRaiz, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' } })).id;
+  // Datos e inspección: se guardan al instante en el dispositivo y se suben cuando hay señal.
+  function guardarDetalles(id, cambio) {
+    const d = buscar(id);
+    if (!d) return;
+    mezclar(d, cambio);
+    const pend = cache.leer(clavePend()) || {};
+    pend[id] = mezclar(pend[id] || {}, JSON.parse(JSON.stringify(cambio)));
+    cache.guardar(clavePend(), pend);
+    cache.guardar('registro.' + cuenta.username, registro);
+    sincronizar();
+  }
+  let sincronizando = false, otraVez = false;
+  async function sincronizar() {
+    if (!cuenta || !Object.keys(cache.leer(clavePend()) || {}).length) return;
+    if (sincronizando) { otraVez = true; return; }
+    sincronizando = true;
+    try { await cambiarRegistro(() => {}); } catch (_) { /* sin señal: se reintenta luego */ }
+    finally {
+      sincronizando = false;
+      if (otraVez) { otraVez = false; sincronizar(); }
     }
-    return idRaiz;
   }
 
-  async function crearDespacho(texto) {
+  const idCarpetas = {};
+  async function asegurarCarpeta(ruta, padreId) {
+    if (idCarpetas[ruta]) return idCarpetas[ruta];
+    try {
+      idCarpetas[ruta] = (await graph(`/me/drive/root:/${ruta.split('/').map(encodeURIComponent).join('/')}`)).id;
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      const destino = padreId ? `/me/drive/items/${padreId}/children` : '/me/drive/root/children';
+      idCarpetas[ruta] = (await graph(destino, { method: 'POST', json: { name: ruta.split('/').pop(), folder: {}, '@microsoft.graph.conflictBehavior': 'fail' } })).id;
+    }
+    return idCarpetas[ruta];
+  }
+  async function carpetaTipo(tipo) {
+    const raiz = await asegurarCarpeta(RAIZ);
+    return asegurarCarpeta(`${RAIZ}/${T(tipo).carpeta}`, raiz);
+  }
+
+  async function crearRegistro(tipo, datos) {
     const fecha = new Date();
-    const { nombre } = nombreCarpeta(texto, fecha);
-    const raiz = await carpetaRaiz();
+    const { nombre } = nombreCarpeta(datos.nombre, fecha);
+    const padre = await carpetaTipo(tipo);
     // "rename": si ya existe una carpeta con ese nombre, OneDrive agrega un número al final
-    const f = await graph(`/me/drive/items/${raiz}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
+    const f = await graph(`/me/drive/items/${padre}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
     const d = {
-      id: f.id, nombre: texto.trim().replace(/\s+/g, ' '), carpeta: f.name, webUrl: f.webUrl,
-      fecha: fecha.toISOString(), estado: 'proceso', cerrado: null, fotos: 0
+      id: f.id, tipo, nombre: datos.nombre.trim().replace(/\s+/g, ' '), carpeta: f.name, webUrl: f.webUrl,
+      fecha: fecha.toISOString(), estado: 'proceso', cerrado: null, fotos: 0, inspeccion: {}
     };
+    CAMPOS.forEach(([k]) => { d[k] = (datos[k] || '').trim(); });
     await cambiarRegistro(r => r.despachos.unshift(d));
     return d;
   }
 
   async function contarFotos(id) {
-    const f = await graph(`/me/drive/items/${id}?$select=id,folder`);
-    return (f.folder && f.folder.childCount) || 0;
+    const r = await graph(`/me/drive/items/${id}/children?$select=id,name,file&$top=999`);
+    return r.value.filter(f => f.file && ES_FOTO.test(f.name)).length;
   }
 
   // ---------- Cola de subida ----------
@@ -334,14 +435,27 @@
     return ultimo.json();
   }
 
+  // Las fotos aceptadas quedan en el celular ("sin subir") hasta que se toca "Subir fotos";
+  // recién ahí pasan a la cola (listo: true) y se suben, esperando señal si hace falta.
+  const porSubir = id => pendientesDe(id).filter(x => !x.listo);
+  const enCola = () => cola.filter(x => x.listo && !x.error);
+  async function subirFotos(d) {
+    const lote = porSubir(d.id);
+    for (const it of lote) { it.listo = true; await idb.poner(it); }
+    await refrescarCola();
+    procesarCola();
+    return lote.length;
+  }
+
   async function procesarCola() {
     if (trabajando || !cuenta) return;
     trabajando = true;
     clearTimeout(reintento);
+    sincronizar();
     try {
       await refrescarCola();
       for (;;) {
-        const it = cola.find(x => !x.error);
+        const it = cola.find(x => x.listo && !x.error);
         if (!it) break;
         subiendoId = it.id; refrescar();
         try {
@@ -351,9 +465,11 @@
           await idb.quitar(it.id);
           sinSenal = false;
           if (vista.id === it.despachoId) vista.nube.push({ id: subido.id, name: subido.name });
+          const x = buscar(it.despachoId);
+          if (x) guardarDetalles(x.id, { fotos: (x.fotos || 0) + 1 });
         } catch (e) {
           if (e instanceof SinSenal) { sinSenal = true; reintento = setTimeout(procesarCola, 20000); break; }
-          if (e.status === 404) { it.error = 'La carpeta del despacho ya no existe en OneDrive.'; await idb.poner(it); }
+          if (e.status === 404) { it.error = 'La carpeta ya no existe en OneDrive.'; await idb.poner(it); }
           else { reintento = setTimeout(procesarCola, 15000); break; } // OneDrive ocupado (429/5xx): reintenta luego
         } finally {
           subiendoId = null;
@@ -376,12 +492,11 @@
       n++;
       await idb.poner({
         id: uid(), cuenta: cuenta.username, despachoId: d.id, folderId: d.id, despacho: d.nombre,
-        archivo: `Foto_${pad3(n)}.${it.ext}`, blob: it.blob, creado: Date.now()
+        archivo: `Foto_${pad3(n)}.${it.ext}`, blob: it.blob, creado: Date.now(), listo: false
       });
     }
     await idb.guardar('contador.' + d.id, n);
     await refrescarCola();
-    procesarCola();
     return n;
   }
 
@@ -407,22 +522,57 @@
     });
   }
 
+  // ---------- Informe en Word ----------
+  function cargarLibreriaWord() {
+    if (window.docx && window.docx.Packer) return Promise.resolve();
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = DOCX_URL;
+      s.onload = () => (window.docx && window.docx.Packer ? res() : rej(new Error('Librería docx no disponible')));
+      s.onerror = () => { s.remove(); rej(new SinSenal()); };
+      document.head.appendChild(s);
+    });
+  }
+  async function descargarInforme(d) {
+    if (window.HUB_DEMO) { toast('En esta vista de prueba no se pueden descargar archivos. Usa la app publicada en GitHub.'); return; }
+    st.generando = d.id; render();
+    try {
+      await cargarLibreriaWord();
+      const doc = window.HCInforme.crear(window.docx, d, CFG.informe || {});
+      const blob = await window.docx.Packer.toBlob(doc);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = window.HCInforme.nombreArchivo(d);
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+      toast('Informe descargado. Ábrelo en Word para completarlo.');
+    } catch (e) {
+      console.error(e);
+      toast(e instanceof SinSenal ? 'Sin señal: la primera vez se necesita internet para preparar el informe.' : 'No se pudo generar el informe. Avisa a soporte.');
+    }
+    st.generando = null; render();
+  }
+
   // ---------- Estado de la pantalla ----------
+  // Pantallas: 'areas' (elegir Despachos/Traslados) → dentro de cada área: 'modulo' (inicio del área),
+  // 'nuevo', 'registros' (buscar y descargar informes) y 'despacho' (un registro abierto).
   const app = document.getElementById('app');
   const cam = document.getElementById('cam');
   const gal = document.getElementById('gal');
   const st = {
-    view: 'boot', prev: 'home', rol: null, menu: false, revision: null, ocupado: false,
-    nombre: '', q: '', desde: '', hasta: '', estado: 'todos', error: null
+    view: 'boot', tipo: 'despacho', prev: 'modulo', rol: null, menu: false, revision: null, ocupado: false,
+    nuevo: {}, q: '', desde: '', hasta: '', estado: 'todos', error: null, abiertos: {}, borrar: null, generando: null
   };
   let vista = { id: null, nube: [], cargando: false, error: null };
+  const EN_AREA = ['modulo', 'nuevo', 'registros', 'despacho'];
 
   function toast(msg) {
     document.querySelector('.toast')?.remove();
     const t = document.createElement('div');
     t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
     document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3500);
+    setTimeout(() => t.remove(), 3800);
   }
   function errorAMensaje(e, accion) {
     if (e instanceof SinSenal) return `No hay señal. Necesitas conexión para ${accion}.`;
@@ -433,12 +583,27 @@
     st.view = view; st.menu = false;
     render(); window.scrollTo(0, 0);
   }
-  // Re-pinta solo pantallas sin campos de texto, para no interrumpir lo que se está escribiendo.
+  // Re-pinta solo pantallas que muestran el avance, y nunca mientras se escribe en un campo.
+  let repintar = false;
   function refrescar() {
-    if (!st.revision && (st.view === 'despacho' || st.view === 'home')) render();
+    if (st.revision || !['despacho', 'areas', 'modulo'].includes(st.view)) return;
+    const a = document.activeElement;
+    if (a && app.contains(a) && /INPUT|TEXTAREA/.test(a.tagName)) { repintar = true; return; }
+    render();
   }
+  document.addEventListener('focusout', () => {
+    if (!repintar) return;
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (a && app.contains(a) && /INPUT|TEXTAREA/.test(a.tagName)) return;
+      repintar = false; refrescar();
+    }, 250);
+  });
   const saludo = () => { const h = new Date().getHours(); return h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches'; };
-  const ordenados = () => registro.despachos.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const ordenados = tipo => registro.despachos.filter(d => !tipo || d.tipo === tipo).sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const inspHechos = d => INSPECCION.filter(([k]) => d.inspeccion && d.inspeccion[k] && d.inspeccion[k].v).length;
+  const datosHechos = d => CAMPOS.filter(([k]) => (d[k] || '').trim()).length;
+  const delMes = d => { const f = new Date(d.fecha), h = new Date(); return f.getMonth() === h.getMonth() && f.getFullYear() === h.getFullYear(); };
 
   // ---------- Pantallas ----------
   function vIngreso() {
@@ -472,99 +637,231 @@
 
   function encabezado(ancho) {
     const nombre = cuenta.name || cuenta.username;
+    const enArea = EN_AREA.includes(st.view);
     return `<header class="top ${ancho ? 'wide' : ''}"><div class="top-in">
-      <div class="mark">HC</div><div class="top-name">Despachos<small>Área de Ventas</small></div>
+      ${enArea
+        ? `<button class="areas-btn" data-act="areas" aria-label="Volver a elegir área">${ic('back')}<span>Áreas</span></button>
+           <div class="top-name">${T(st.tipo).plural}<small>Hub Comex</small></div>`
+        : `<div class="mark">HC</div><div class="top-name">Hub Comex<small>Área de Ventas</small></div>`}
       <button class="who" data-act="menu" aria-label="Cuenta"><span class="ava">${esc(nombre.trim()[0] || 'V').toUpperCase()}</span><span>${esc(nombre.split(' ')[0])}</span></button>
     </div></header>`;
   }
   function barra() {
+    if (!EN_AREA.includes(st.view)) return '';
     const v = st.view;
-    return `<nav class="nav" aria-label="Principal"><div class="nav-in">
-      <button class="nav-b" data-act="ir" data-v="home" ${v === 'home' ? 'aria-current="page"' : ''}>${ic('home')}Inicio</button>
-      <button class="nav-plus" data-act="ir" data-v="nuevo" aria-label="Nuevo despacho">${ic('plus')}</button>
-      <button class="nav-b" data-act="ir" data-v="registro" ${v === 'registro' ? 'aria-current="page"' : ''}>${ic('list')}Registro</button>
+    const t = T(st.tipo);
+    return `<nav class="nav" aria-label="${t.plural}"><div class="nav-in">
+      <button class="nav-b" data-act="ir" data-v="modulo" ${v === 'modulo' ? 'aria-current="page"' : ''}>${ic('home')}Inicio</button>
+      <button class="nav-plus" data-act="nuevo" aria-label="Nuevo ${t.uno}">${ic('plus')}</button>
+      <button class="nav-b" data-act="registros" ${v === 'registros' ? 'aria-current="page"' : ''}>${ic('list')}Registros</button>
     </div></nav>`;
   }
   function tarjeta(d) {
-    const pend = pendientesDe(d.id).length;
+    const sinSubir = porSubir(d.id).length;
+    const sub = [fmtDate(d.fecha), d.cliente ? esc(d.cliente) : '', `${d.fotos} fotos${sinSubir ? ` · ${sinSubir} sin subir` : ''}`].filter(Boolean).join(' · ');
     return `<div class="card">
       <button class="main" data-act="abrir" data-id="${esc(d.id)}">
         <span class="name">${esc(d.nombre)}</span>
-        <span class="meta">${fmtDate(d.fecha)} · ${d.fotos} fotos${pend ? ` · ${pend} por subir` : ''} <span class="pill ${d.estado}">${d.estado === 'proceso' ? 'En proceso' : 'Cerrado'}</span></span>
+        <span class="meta">${sub} <span class="pill ${d.estado}">${d.estado === 'proceso' ? 'En proceso' : 'Cerrado'}</span></span>
       </button>
+      <button class="icon-btn" data-act="informe" data-id="${esc(d.id)}" aria-label="Descargar informe en Word" title="Informe Word">${st.generando === d.id ? ic('spin') : ic('doc')}</button>
       <a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>
     </div>`;
   }
-
-  function vInicio() {
-    const lista = ordenados();
-    const enProceso = lista.filter(d => d.estado === 'proceso');
-    const hoy = new Date();
-    const delMes = lista.filter(d => { const f = new Date(d.fecha); return f.getMonth() === hoy.getMonth() && f.getFullYear() === hoy.getFullYear(); });
-    const pend = cola.filter(x => !x.error).length;
-    return `<main class="wrap">
-      <div class="greet"><h1>${saludo()},<br>${st.rol === 'soporte' ? 'Soporte' : 'equipo de Ventas'}</h1>
-        <p>${hoy.toLocaleDateString('es-EC', { weekday: 'long', day: 'numeric', month: 'long' })} · ${delMes.length} ${delMes.length === 1 ? 'despacho' : 'despachos'} este mes</p></div>
-      ${DEMO ? `<div class="note info">${ic('info')}<span><b>Versión de prueba.</b> Los despachos y fotos se guardan solo en este dispositivo; todavía no se suben a OneDrive.</span></div>` : ''}
+  function notas() {
+    const pend = enCola().length;
+    return `${DEMO ? `<div class="note info">${ic('info')}<span><b>Versión de prueba.</b> Los registros y fotos se guardan solo en este dispositivo; todavía no se suben a OneDrive.</span></div>` : ''}
       ${st.rol === 'soporte' ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
-      ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo a OneDrive…'}</span></div>` : ''}
-      <button class="cta" data-act="ir" data-v="nuevo"><span class="plus">${ic('plus')}</span><span><b>Nuevo despacho</b><small>Ponle nombre y empieza a tomar fotos</small></span></button>
-      ${enProceso.length ? `<div class="list"><span class="eyebrow">Sin cerrar</span>${enProceso.map(tarjeta).join('')}</div>` : ''}
+      ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo…'}</span></div>` : ''}`;
+  }
+
+  // Inicio: elegir el área, como en el Hub de Recepción.
+  function vAreas() {
+    const nombre = st.rol === 'soporte' ? 'Soporte' : 'Ventas';
+    const area = (tipo, icono, desc) => {
+      const lista = ordenados(tipo);
+      const abiertos = lista.filter(d => d.estado === 'proceso').length;
+      return `<button class="area" data-act="area" data-t="${tipo}">
+        <span class="area-ic">${ic(icono)}</span>
+        <b>${T(tipo).plural}</b>
+        <small>${desc}</small>
+        <span class="area-n">${lista.filter(delMes).length} este mes${abiertos ? ` · <em>${abiertos} en proceso</em>` : ''}</span>
+      </button>`;
+    };
+    return `<main class="wrap areas-wrap">
+      <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>Elige el área</p></div>
+      ${notas()}
+      <div class="areas">
+        ${area('despacho', 'truck', 'Exportación de producto · fotos e informe')}
+        ${area('traslado', 'swap', 'Traslado de producto · fotos e informe')}
+      </div>
+    </main>`;
+  }
+
+  // Inicio del área: crear uno nuevo y ver los que siguen abiertos.
+  function vModulo() {
+    const t = T(st.tipo);
+    const lista = ordenados(st.tipo);
+    const abiertos = lista.filter(d => d.estado === 'proceso');
+    const recientes = lista.filter(d => d.estado !== 'proceso').slice(0, 3);
+    return `<main class="wrap">
+      <div class="greet"><h1>${t.plural}</h1>
+        <p>${new Date().toLocaleDateString('es-EC', { weekday: 'long', day: 'numeric', month: 'long' })} · ${lista.filter(delMes).length} este mes</p></div>
+      ${notas()}
+      <button class="cta" data-act="nuevo"><span class="plus">${ic('plus')}</span><span><b>Nuevo ${t.uno}</b><small>Datos básicos y a tomar fotos</small></span></button>
+      ${abiertos.length ? `<section class="list"><span class="eyebrow">En proceso</span>${abiertos.map(tarjeta).join('')}</section>` : ''}
       <section class="list">
-        <div class="sec-h"><h2>Últimos despachos</h2>${lista.length ? `<button class="link" data-act="ir" data-v="registro">Ver registro</button>` : ''}</div>
-        ${lista.length ? lista.filter(d => d.estado !== 'proceso').slice(0, 3).map(tarjeta).join('') || '<p class="help">Los despachos cerrados aparecerán aquí.</p>'
-          : `<div class="empty">Aún no hay despachos. Toca <b>Nuevo despacho</b> para crear el primero.</div>`}
+        <div class="sec-h"><h2>Últimos cerrados</h2>${lista.length ? `<button class="link" data-act="registros">Ver registros</button>` : ''}</div>
+        ${recientes.length ? recientes.map(tarjeta).join('')
+          : `<div class="empty">${lista.length ? `Los ${t.plural.toLowerCase()} cerrados aparecerán aquí.` : `Aún no hay ${t.plural.toLowerCase()}. Toca <b>Nuevo ${t.uno}</b> para crear el primero.`}</div>`}
       </section>
     </main>`;
   }
 
+  function filtrados() {
+    const q = st.q.trim().toLowerCase();
+    return ordenados(st.tipo).filter(d => {
+      if (q && ![d.nombre, d.carpeta, d.cliente, d.destino, d.pedido].some(x => (x || '').toLowerCase().includes(q))) return false;
+      const dia = isoDay(new Date(d.fecha));
+      if (st.desde && dia < st.desde) return false;
+      if (st.hasta && dia > st.hasta) return false;
+      if (st.estado !== 'todos' && d.estado !== st.estado) return false;
+      return true;
+    });
+  }
+  function listaRegistro() {
+    const filas = filtrados();
+    const t = T(st.tipo);
+    const hayFiltro = st.q || st.desde || st.hasta || st.estado !== 'todos';
+    return `<div class="sec-h"><span class="count">${filas.length} ${filas.length === 1 ? t.uno : t.plural.toLowerCase()}</span>
+        ${hayFiltro ? `<button class="link" data-act="limpiar">Quitar filtros</button>` : ''}</div>
+      ${filas.length ? filas.map(tarjeta).join('')
+        : `<div class="empty">${ordenados(st.tipo).length ? `Ningún ${t.uno} coincide con la búsqueda.` : `Aún no hay ${t.plural.toLowerCase()} registrados.`}</div>`}`;
+  }
+  // Registros: buscar, filtrar y descargar el informe del que se necesite.
+  function vRegistros() {
+    const t = T(st.tipo);
+    const chip = (v, l) => `<button class="chip" data-act="estado" data-e="${v}" aria-pressed="${st.estado === v}">${l}</button>`;
+    return `<main class="wrap wide">
+      <div><h1 style="font-size:28px">Registros de ${t.plural.toLowerCase()}</h1>
+        <p class="muted" style="margin-top:6px">Toca ${ic('doc')} para descargar el informe en Word o ${ic('folder')} para abrir la carpeta de fotos.</p></div>
+      <div class="reg-layout">
+        <div class="filters">
+          <div class="search">${ic('search')}<input class="input" id="q" type="search" placeholder="Buscar por nombre, cliente o pedido" value="${esc(st.q)}" autocomplete="off"></div>
+          <div class="dates">
+            <label for="desde">Desde<input class="input" type="date" id="desde" value="${st.desde}"></label>
+            <label for="hasta">Hasta<input class="input" type="date" id="hasta" value="${st.hasta}"></label>
+          </div>
+          <div class="chips">${chip('todos', 'Todos')}${chip('proceso', 'En proceso')}${chip('cerrado', 'Cerrados')}</div>
+        </div>
+        <div class="list" id="lista">${listaRegistro()}</div>
+      </div>
+    </main>`;
+  }
+
+  // Listas para elegir: el catálogo de config.js (cuando se cargue) más lo ya escrito en registros anteriores.
+  function sugerencias() {
+    const catalogo = CFG.catalogos || {};
+    return CAMPOS.map(([k]) => {
+      const vals = [...new Set([...(catalogo[k] || []), ...registro.despachos.map(d => (d[k] || '').trim())].filter(Boolean))].slice(0, 200);
+      return `<datalist id="dl-${k}">${vals.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
+    }).join('');
+  }
+  function campo(k, etiqueta, ej, valor, prefijo) {
+    return `<div class="field"><label for="${prefijo}-${k}">${etiqueta}</label>
+      <input class="input" id="${prefijo}-${k}" data-campo="${k}" list="dl-${k}" autocomplete="off" placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
+  }
   function vistaRuta(final, quitados) {
     return `<span class="eyebrow">Se creará la carpeta</span>
-      <div class="crumbs">${ic('folder')}OneDrive <span>›</span> ${esc(CFG.carpetaRaiz)} <span>›</span> <b>${final ? esc(final) : '…'}</b></div>
+      <div class="crumbs">${ic('folder')}OneDrive <span>›</span> ${esc(RAIZ)} <span>›</span> ${esc(T(st.tipo).carpeta)} <span>›</span> <b>${final ? esc(final) : '…'}</b></div>
       ${quitados.length ? `<p class="warn">${ic('alert')}<span>OneDrive no acepta ${quitados.map(c => `<code class="mono">${esc(c)}</code>`).join(' ')} en nombres de carpeta; se cambiaron por guiones.</span></p>` : ''}`;
   }
   function vNuevo() {
-    const { nombre, quitados } = nombreCarpeta(st.nombre, new Date());
+    const t = T(st.tipo);
+    const n = st.nuevo;
+    const { nombre, quitados } = nombreCarpeta(n.nombre || '', new Date());
     return `<main class="wrap">
-      <button class="btn ghost back" data-act="ir" data-v="home">${ic('back')}Inicio</button>
-      <h1 style="font-size:28px">Nuevo despacho</h1>
+      <h1 style="font-size:28px">Nuevo ${t.uno}</h1>
       <div class="field">
-        <label for="nombre">Nombre del despacho</label>
-        <input class="input" id="nombre" autocomplete="off" placeholder="Ej. Pulpa mango Goya contenedor C7" value="${esc(st.nombre)}" maxlength="120">
+        <label for="nuevo-nombre">Nombre del ${t.uno} <span class="req">obligatorio</span></label>
+        <input class="input" id="nuevo-nombre" data-campo="nombre" autocomplete="off" placeholder="${esc(t.ej)}" value="${esc(n.nombre || '')}" maxlength="120">
         <p class="help">Será el nombre de la carpeta. Escríbelo como lo vas a buscar después.</p>
       </div>
       <div class="preview-path" id="ruta">${vistaRuta(nombre, quitados)}</div>
-      <button class="btn primary big block" data-act="crear" id="crear" ${st.nombre.trim().length >= 3 && !st.ocupado ? '' : 'disabled'}>${st.ocupado ? ic('spin') + 'Creando carpeta…' : ic('camera') + 'Crear y tomar fotos'}</button>
+      <div class="form-grid">${CAMPOS.map(([k, e, ej]) => campo(k, e, ej, n[k], 'nuevo')).join('')}</div>
+      <p class="help">Al crear se guarda la fecha y la hora de inicio; la hora de fin se guarda al cerrar. Estos datos se pueden completar o corregir después.</p>
+      ${sugerencias()}
+      <button class="btn primary big block" data-act="crear" id="crear" ${(n.nombre || '').trim().length >= 3 && !st.ocupado ? '' : 'disabled'}>${st.ocupado ? ic('spin') + 'Creando carpeta…' : ic('camera') + 'Crear y tomar fotos'}</button>
     </main>`;
   }
 
   function cajaSubida(d) {
     const pend = pendientesDe(d.id);
+    const borradores = pend.filter(x => !x.listo).length;
     const conError = pend.filter(x => x.error);
-    const esperando = pend.length - conError.length;
+    const esperando = pend.filter(x => x.listo && !x.error).length;
     const subidas = vista.nube.length;
     const total = subidas + esperando;
     const pct = total ? Math.round(subidas / total * 100) : 0;
     let cls = '', icon = 'cloud', linea, ayuda;
-    if (vista.cargando && !total) { linea = 'Revisando fotos en OneDrive…'; ayuda = ''; }
-    else if (!total) { linea = 'Aún no hay fotos'; ayuda = 'Cada foto que aceptes se sube sola a la carpeta.'; }
-    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} de ${total} fotos subidas`; ayuda = DEMO ? 'Todas las fotos están guardadas.' : 'Todas las fotos ya están en OneDrive.'; }
-    else if (sinSenal) { cls = 'off'; icon = 'nosignal'; linea = `${subidas} de ${total} fotos subidas`; ayuda = `<b>Sin señal.</b> ${esperando} ${esperando === 1 ? 'foto espera' : 'fotos esperan'} en el celular y se ${esperando === 1 ? 'subirá' : 'subirán'} solas cuando vuelva la conexión. Puedes seguir tomando fotos.`; }
-    else { cls = 'going'; icon = 'cloud'; linea = `${subidas} de ${total} fotos subidas`; ayuda = 'Subiendo en segundo plano. Puedes seguir tomando fotos; no cierres la app hasta que terminen.'; }
-    return `<div class="upbox ${cls}">
-      <div class="upline">${ic(icon)}<span>${linea}</span><span class="s">${total ? pct + '%' : ''}</span></div>
-      ${total ? `<div class="track"><i style="width:${pct}%"></i></div>` : ''}
-      ${ayuda ? `<p class="help">${ayuda}</p>` : ''}
-      ${conError.length ? `<div class="note bad">${ic('alert')}<span>${conError.length} ${conError.length === 1 ? 'foto no se pudo subir' : 'fotos no se pudieron subir'}: ${esc(conError[0].error)} <button class="link" data-act="descartar">Descartarlas</button></span></div>` : ''}
-    </div>`;
+    if (vista.cargando && !total) { linea = 'Revisando fotos…'; ayuda = ''; }
+    else if (!total) { linea = 'Aún no hay fotos subidas'; ayuda = ''; }
+    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} ${total === 1 ? 'foto subida' : 'fotos subidas'}`; ayuda = DEMO ? 'Están guardadas en la carpeta.' : 'Ya están en OneDrive.'; }
+    else if (sinSenal) { cls = 'off'; icon = 'nosignal'; linea = `${subidas} de ${total} fotos subidas`; ayuda = `<b>Sin señal.</b> ${esperando} ${esperando === 1 ? 'foto espera' : 'fotos esperan'} en el celular y se ${esperando === 1 ? 'subirá' : 'subirán'} solas cuando vuelva la conexión.`; }
+    else { cls = 'going'; icon = 'cloud'; linea = `${subidas} de ${total} fotos subidas`; ayuda = 'Subiendo en segundo plano. No cierres la app hasta que terminen.'; }
+    return `${borradores ? `<div class="stage">
+        <div class="stage-tx"><b>${borradores} ${borradores === 1 ? 'foto sin subir' : 'fotos sin subir'}</b><span>Revisa y elimina las que no sirvan. Cuando estén todas, súbelas.</span></div>
+        <button class="btn primary" data-act="subirfotos">${ic('cloud')}Subir ${borradores}</button>
+      </div>` : ''}
+      ${total || vista.cargando ? `<div class="upbox ${cls}">
+        <div class="upline">${ic(icon)}<span>${linea}</span><span class="s">${total ? pct + '%' : ''}</span></div>
+        ${total ? `<div class="track"><i style="width:${pct}%"></i></div>` : ''}
+        ${ayuda ? `<p class="help">${ayuda}</p>` : ''}
+      </div>` : ''}
+      ${conError.length ? `<div class="note bad">${ic('alert')}<span>${conError.length} ${conError.length === 1 ? 'foto no se pudo subir' : 'fotos no se pudieron subir'}: ${esc(conError[0].error)} <button class="link" data-act="descartar">Descartarlas</button></span></div>` : ''}`;
+  }
+  function seccionDatos(d) {
+    const hechos = datosHechos(d);
+    return `<details class="sec" data-sec="datos" ${st.abiertos.datos ? 'open' : ''}>
+      <summary><span>Datos del ${T(d).uno}</span><span class="prog ${hechos === CAMPOS.length ? 'ok' : ''}">${hechos} de ${CAMPOS.length}</span>${ic('chev')}</summary>
+      <div class="sec-in">
+        <div class="form-grid">${CAMPOS.map(([k, e, ej]) => campo(k, e, ej, d[k], 'det')).join('')}</div>
+        <div class="kv"><span>Hora de inicio</span><b>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}</b><span>Hora de fin</span><b>${d.cerrado ? `${fmtDate(d.cerrado)} · ${fmtTime(d.cerrado)}` : 'Se guarda al cerrar'}</b></div>
+        <p class="help">Los cambios se guardan solos. Transporte, carga y sellos se completan en el informe de Word.</p>
+        ${sugerencias()}
+      </div>
+    </details>`;
+  }
+  function seccionInspeccion(d) {
+    const hechos = inspHechos(d);
+    const insp = d.inspeccion || {};
+    return `<details class="sec" data-sec="insp" ${st.abiertos.insp ? 'open' : ''}>
+      <summary><span>Inspección previa</span><span class="prog ${hechos === INSPECCION.length ? 'ok' : ''}">${hechos} de ${INSPECCION.length}</span>${ic('chev')}</summary>
+      <div class="sec-in insp">
+        ${INSPECCION.map(([k, nombre]) => {
+          const r = insp[k] || {};
+          return `<div class="insp-row">
+            <span class="insp-n">${esc(nombre)}</span>
+            <div class="seg" role="group" aria-label="${esc(nombre)}">
+              <button data-act="insp" data-k="${k}" data-v="si" aria-pressed="${r.v === 'si'}">Sí</button>
+              <button data-act="insp" data-k="${k}" data-v="no" aria-pressed="${r.v === 'no'}">No</button>
+            </div>
+            ${r.v === 'no' ? `<input class="input obs" data-obs="${k}" placeholder="¿Qué se encontró?" value="${esc(r.obs || '')}" maxlength="200" aria-label="Observación: ${esc(nombre)}">` : ''}
+          </div>`;
+        }).join('')}
+        <p class="help">Se marca antes de cargar. Si algo está mal, escribe la observación; sale en el informe.</p>
+      </div>
+    </details>`;
   }
   function vDespacho() {
     const d = buscar(vista.id);
-    if (!d) return vInicio();
+    if (!d) return vModulo();
+    const t = T(d);
     const abierto = d.estado === 'proceso';
     const pend = pendientesDe(d.id);
+    const borradores = pend.filter(x => !x.listo).length;
     const fotoNum = name => { const m = /(\d+)/.exec(name); return m ? m[1] : ''; };
-    // Botón X para eliminar (solo con el despacho abierto); al tocarlo pide confirmar sobre la misma foto.
+    // Botón X para eliminar (solo con el registro abierto); al tocarlo pide confirmar sobre la misma foto.
     const quitar = (id, tipo, nombre) => {
       if (!abierto || id === subiendoId) return '';
       if (st.borrar === id) return `<div class="confirm"><span>¿Eliminar foto ${esc(fotoNum(nombre))}?</span>
@@ -578,24 +875,26 @@
     });
     const tilesCola = pend.slice().reverse().map(x => {
       const badge = x.error ? `<span class="st err" title="No se pudo subir">${ic('alert')}</span>`
+        : !x.listo ? `<span class="st local" title="Sin subir">Sin subir</span>`
         : x.id === subiendoId ? `<span class="st up" title="Subiendo">${ic('spin')}</span>`
         : `<span class="st wait" title="Esperando">${ic('clock')}</span>`;
-      return `<div class="tile pend"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${quitar(x.id, 'cola', x.archivo)}</div>`;
+      return `<div class="tile ${x.listo ? 'pend' : 'draft'}"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${quitar(x.id, 'cola', x.archivo)}</div>`;
     });
     const tiles = tilesCola.concat(tilesNube);
     return `<main class="wrap">
-      <button class="btn ghost back" data-act="ir" data-v="${st.prev}">${ic('back')}${st.prev === 'registro' ? 'Registro' : 'Inicio'}</button>
+      <button class="btn ghost back" data-act="volver">${ic('back')}${st.prev === 'registros' ? 'Registros' : 'Inicio'}</button>
       <div class="d-head">
+        <span class="eyebrow">${t.Uno}</span>
         <h1>${esc(d.nombre)}</h1>
-        <div class="d-meta"><span class="pill ${d.estado}">${abierto ? 'En proceso' : 'Cerrado'}</span><span>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}</span></div>
-        <div class="crumbs">${ic('folder')}OneDrive › ${esc(CFG.carpetaRaiz)} › <b>${esc(d.carpeta)}</b></div>
+        <div class="d-meta"><span class="pill ${d.estado}">${abierto ? 'En proceso' : 'Cerrado'}</span><span>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}${d.cliente ? ' · ' + esc(d.cliente) : ''}</span></div>
+        <div class="crumbs">${ic('folder')}OneDrive › ${esc(RAIZ)} › ${esc(t.carpeta)} › <b>${esc(d.carpeta)}</b></div>
       </div>
       ${abierto ? `
         <div class="row">
           <button class="btn primary big" data-act="camara" style="flex:2 1 200px">${ic('camera')}Tomar foto</button>
           <button class="btn big" data-act="galeria" style="flex:1 1 140px">${ic('image')}Desde el celular</button>
         </div>` : `
-        <div class="closed-note"><span>Despacho cerrado el ${fmtDate(d.cerrado)}. Si faltó alguna foto, reábrelo para agregarla.</span>
+        <div class="closed-note"><span>${t.Uno} cerrado el ${fmtDate(d.cerrado)} (${fmtTime(d.cerrado)}). Si faltó alguna foto, reábrelo para agregarla.</span>
           <button class="btn" data-act="reabrir" ${st.ocupado ? 'disabled' : ''}>${ic('redo')}Reabrir para agregar fotos</button></div>`}
       ${cajaSubida(d)}
       <section class="list">
@@ -603,13 +902,16 @@
         ${vista.error ? `<div class="note bad">${ic('alert')}<span>${esc(vista.error)} <button class="link" data-act="recargarvista">Reintentar</button></span></div>` : ''}
         ${tiles.length ? `<div class="grid">${tiles.join('')}</div>`
           : vista.cargando ? `<p class="loading">${ic('spin')}Cargando fotos…</p>`
-          : `<div class="empty">Toca <b>Tomar foto</b> para empezar. Cada foto la revisas antes de que se suba.</div>`}
+          : `<div class="empty">Toca <b>Tomar foto</b> para empezar. Las fotos quedan en el celular hasta que tocas <b>Subir</b>.</div>`}
       </section>
+      ${seccionDatos(d)}
+      ${seccionInspeccion(d)}
       <div class="row">
+        <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
         <a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>
-        ${abierto ? `<button class="btn" data-act="cerrar" ${tiles.length && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar despacho</button>` : ''}
       </div>
-      ${abierto && pend.length ? `<p class="help">Si cierras el despacho ahora, las ${pend.length} fotos pendientes se suben igual cuando haya señal.</p>` : ''}
+      ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
+        ${borradores ? `<p class="help">Para cerrar, primero sube las ${borradores} ${borradores === 1 ? 'foto' : 'fotos'} que están en el celular o elimínalas.</p>` : ''}` : ''}
     </main>`;
   }
 
@@ -630,48 +932,11 @@
     return `<div class="review" role="dialog" aria-label="Revisar fotos">
       <div class="review-top"><b>${r.items.length} ${r.items.length === 1 ? 'foto seleccionada' : 'fotos seleccionadas'}</b><span class="mono">${fmtSize(total)}</span></div>
       <div class="review-grid"><div class="grid">${r.items.map((it, i) => `<div class="tile"><img src="${it.url}" alt="Foto ${i + 1}"><button class="rm" data-act="quitar" data-i="${i}" aria-label="Quitar foto">${ic('x')}</button></div>`).join('')}</div></div>
-      <p class="hint">Quita las que no sirvan antes de subir.</p>
+      <p class="hint">Quita las que no sirvan antes de agregarlas.</p>
       <div class="review-bar">
         <button class="btn sec" data-act="cancelar">Cancelar</button>
-        <button class="btn acc" data-act="aceptar" ${r.items.length ? '' : 'disabled'}>${ic('cloud')}Subir ${r.items.length}</button>
+        <button class="btn acc" data-act="aceptar" ${r.items.length ? '' : 'disabled'}>${ic('check')}Agregar ${r.items.length}</button>
       </div></div>`;
-  }
-
-  function filtrados() {
-    const q = st.q.trim().toLowerCase();
-    return ordenados().filter(d => {
-      if (q && !d.nombre.toLowerCase().includes(q) && !d.carpeta.toLowerCase().includes(q)) return false;
-      const dia = isoDay(new Date(d.fecha));
-      if (st.desde && dia < st.desde) return false;
-      if (st.hasta && dia > st.hasta) return false;
-      if (st.estado !== 'todos' && d.estado !== st.estado) return false;
-      return true;
-    });
-  }
-  function listaRegistro() {
-    const filas = filtrados();
-    const hayFiltro = st.q || st.desde || st.hasta || st.estado !== 'todos';
-    return `<div class="sec-h"><span class="count">${filas.length} ${filas.length === 1 ? 'despacho' : 'despachos'}</span>
-        ${hayFiltro ? `<button class="link" data-act="limpiar">Quitar filtros</button>` : ''}</div>
-      ${filas.length ? filas.map(tarjeta).join('')
-        : `<div class="empty">${registro.despachos.length ? 'Ningún despacho coincide con la búsqueda.' : 'Aún no hay despachos registrados.'}</div>`}`;
-  }
-  function vRegistro() {
-    const chip = (v, l) => `<button class="chip" data-act="estado" data-e="${v}" aria-pressed="${st.estado === v}">${l}</button>`;
-    return `<main class="wrap wide">
-      <h1 style="font-size:28px">Registro de despachos</h1>
-      <div class="reg-layout">
-        <div class="filters">
-          <div class="search">${ic('search')}<input class="input" id="q" type="search" placeholder="Buscar por nombre o contenedor" value="${esc(st.q)}" autocomplete="off"></div>
-          <div class="dates">
-            <label for="desde">Desde<input class="input" type="date" id="desde" value="${st.desde}"></label>
-            <label for="hasta">Hasta<input class="input" type="date" id="hasta" value="${st.hasta}"></label>
-          </div>
-          <div class="chips">${chip('todos', 'Todos')}${chip('proceso', 'En proceso')}${chip('cerrado', 'Cerrados')}</div>
-        </div>
-        <div class="list" id="lista">${listaRegistro()}</div>
-      </div>
-    </main>`;
   }
 
   function vMenu() {
@@ -681,7 +946,7 @@
       <span class="eyebrow">Sesión</span>
       <p><b>${esc(cuenta.name || '')}</b><br><span class="muted">${esc(cuenta.username)}</span></p>
       <p class="help">La sesión queda abierta en este dispositivo aunque cierres la app.</p>
-      ${pend ? `<div class="note">${ic('alert')}<span>Hay ${pend} ${pend === 1 ? 'foto' : 'fotos'} sin subir. Espera a que terminen antes de cerrar sesión.</span></div>` : ''}
+      ${pend ? `<div class="note">${ic('alert')}<span>Hay ${pend} ${pend === 1 ? 'foto' : 'fotos'} sin subir. Súbelas y espera a que terminen antes de cerrar sesión.</span></div>` : ''}
       <button class="btn block danger" data-act="salir" ${pend ? 'disabled' : ''}>${ic('logout')}Cerrar sesión</button>
       <button class="btn block" data-act="cerrarmenu">Cancelar</button>
     </div></div>`;
@@ -693,26 +958,27 @@
     if (v === 'ingreso') { app.innerHTML = vIngreso(); return; }
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
-    const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registro' ? vRegistro() : vInicio();
-    app.innerHTML = encabezado(v === 'registro') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu();
+    const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu();
   }
 
-  // ---------- Vista de un despacho ----------
+  // ---------- Vista de un registro ----------
   async function cargarVista(id) {
     vista = { id, nube: [], cargando: true, error: null };
     st.borrar = null;
+    const d = buscar(id);
+    if (d) st.tipo = d.tipo;
     render();
     try {
       const r = await graph(`/me/drive/items/${id}/children?$select=id,name,file&$expand=thumbnails&$top=999`);
       if (vista.id !== id) return;
-      vista.nube = r.value.filter(f => f.file)
+      vista.nube = r.value.filter(f => f.file && ES_FOTO.test(f.name))
         .map(f => ({ id: f.id, name: f.name, thumb: f.thumbnails && f.thumbnails[0] && f.thumbnails[0].medium && f.thumbnails[0].medium.url }))
         .sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }));
-      const d = buscar(id);
       if (d && d.fotos !== vista.nube.length) cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === id); if (x) x.fotos = vista.nube.length; }).catch(() => {});
     } catch (e) {
       if (vista.id !== id) return;
-      vista.error = e instanceof SinSenal ? 'Sin señal: no se pueden mostrar las fotos que ya están en OneDrive.' : 'No se pudieron cargar las fotos de OneDrive.';
+      vista.error = e instanceof SinSenal ? 'Sin señal: no se pueden mostrar las fotos que ya están en OneDrive.' : 'No se pudieron cargar las fotos.';
     }
     vista.cargando = false;
     render();
@@ -731,11 +997,26 @@
     if (st.revision) st.revision.items.forEach(it => URL.revokeObjectURL(it.url));
     st.revision = null;
   }
+  const actualizarLista = () => cargarRegistro().then(() => {
+    if (st.view === 'registros') document.getElementById('lista').innerHTML = listaRegistro();
+    else refrescar();
+  }).catch(() => {});
+  function entrarArea(tipo) {
+    if (tipo !== st.tipo) Object.assign(st, { q: '', desde: '', hasta: '', estado: 'todos' });
+    st.tipo = tipo;
+    ir('modulo');
+    actualizarLista();
+  }
+
+  document.addEventListener('toggle', e => {
+    const s = e.target.closest && e.target.closest('details[data-sec]');
+    if (s) st.abiertos[s.dataset.sec] = s.open;
+  }, true);
 
   document.addEventListener('click', async e => {
     if (DEMO && e.target.closest('a[target="_blank"]')) {
       e.preventDefault();
-      toast('En la app real, este botón abre la carpeta del despacho en OneDrive.');
+      toast('En la app real, este botón abre la carpeta en OneDrive.');
       return;
     }
     if (e.target.closest('[data-stop]') && !e.target.closest('[data-act]')) return;
@@ -753,35 +1034,54 @@
       case 'recargar': location.reload(); break;
       case 'menu': st.menu = true; render(); break;
       case 'cerrarmenu': if (e.target === b || b.tagName === 'BUTTON') { st.menu = false; render(); } break;
-      case 'ir': {
-        const v = b.dataset.v;
-        if (v === 'nuevo') st.nombre = '';
-        ir(v);
-        if (v === 'nuevo') setTimeout(() => document.getElementById('nombre')?.focus(), 30);
-        if (v === 'home' || v === 'registro') cargarRegistro().then(refrescar).catch(() => {});
+      case 'areas': ir('areas'); actualizarLista(); break;
+      case 'area': entrarArea(b.dataset.t); break;
+      case 'ir': ir(b.dataset.v); actualizarLista(); break;
+      case 'registros': ir('registros'); actualizarLista(); break;
+      case 'volver': ir(st.prev === 'registros' ? 'registros' : 'modulo'); actualizarLista(); break;
+      case 'nuevo': {
+        // El lugar de carga casi siempre se repite: se propone el del último registro.
+        const ultimo = ordenados(st.tipo)[0];
+        st.nuevo = { lugarCarga: ultimo ? ultimo.lugarCarga || '' : '' };
+        ir('nuevo');
+        setTimeout(() => document.getElementById('nuevo-nombre')?.focus(), 30);
         break;
       }
       case 'abrir': {
-        st.prev = st.view === 'registro' ? 'registro' : 'home';
+        st.prev = st.view === 'registros' ? 'registros' : 'modulo';
         st.view = 'despacho'; st.menu = false;
         cargarVista(b.dataset.id);
         window.scrollTo(0, 0);
         break;
       }
       case 'crear': {
-        if (st.ocupado || st.nombre.trim().length < 3) return;
+        if (st.ocupado || (st.nuevo.nombre || '').trim().length < 3) return;
         st.ocupado = true; render();
         try {
-          const nd = await crearDespacho(st.nombre);
+          const nd = await crearRegistro(st.tipo, st.nuevo);
           st.ocupado = false;
-          st.prev = 'home';
+          st.prev = 'modulo';
+          st.abiertos = {};
           vista = { id: nd.id, nube: [], cargando: false, error: null };
           ir('despacho');
-          toast('Carpeta creada en OneDrive');
+          toast(DEMO ? 'Carpeta creada' : 'Carpeta creada en OneDrive');
         } catch (err) {
           st.ocupado = false; render();
           toast(errorAMensaje(err, 'crear la carpeta'));
         }
+        break;
+      }
+      case 'informe': {
+        const x = buscar(b.dataset.id);
+        if (x && !st.generando) descargarInforme(x);
+        break;
+      }
+      case 'insp': {
+        const k = b.dataset.k, v = b.dataset.v;
+        const actual = d.inspeccion && d.inspeccion[k] && d.inspeccion[k].v;
+        guardarDetalles(d.id, { inspeccion: { [k]: { v: actual === v ? null : v } } });
+        render();
+        if (v === 'no' && actual !== 'no') setTimeout(() => document.querySelector(`[data-obs="${k}"]`)?.focus(), 30);
         break;
       }
       case 'camara': cam.click(); break;
@@ -795,11 +1095,17 @@
       }
       case 'aceptar': {
         const items = st.revision.items;
-        st.revision = null; // las URLs se liberan cuando la foto termina de subirse
+        st.revision = null;
         items.forEach(it => URL.revokeObjectURL(it.url));
         const n = await encolar(items, d);
         render();
-        toast(items.length === 1 ? `Foto ${pad3(n)} aceptada` : `${items.length} fotos aceptadas`);
+        toast(items.length === 1 ? `Foto ${pad3(n)} agregada. Súbela cuando termines.` : `${items.length} fotos agregadas. Súbelas cuando termines.`);
+        break;
+      }
+      case 'subirfotos': {
+        const n = await subirFotos(d);
+        render();
+        toast(sinSenal ? `${n} ${n === 1 ? 'foto' : 'fotos'} en espera: se subirán cuando haya señal.` : `Subiendo ${n} ${n === 1 ? 'foto' : 'fotos'}…`);
         break;
       }
       case 'descartar': {
@@ -826,6 +1132,7 @@
           await graph(`/me/drive/items/${id}`, { method: 'DELETE' });
           vista.nube = vista.nube.filter(f => f.id !== id);
           const n = vista.nube.length;
+          d.fotos = n;
           cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); if (x) x.fotos = n; }).catch(() => {});
           toast(DEMO ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
         } catch (err) {
@@ -836,16 +1143,17 @@
         break;
       }
       case 'cerrar': {
+        if (porSubir(d.id).length) { toast('Primero sube las fotos que están en el celular.'); break; }
         st.ocupado = true; render();
         try {
           const n = await contarFotos(d.id);
-          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'cerrado'; x.cerrado = new Date().toISOString(); x.fotos = n; });
+          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'cerrado'; x.cerrado = new Date().toISOString(); x.fotos = Math.max(n, x.fotos || 0); });
           st.ocupado = false;
-          ir('home');
-          toast(`Despacho "${d.nombre}" cerrado`);
+          ir('modulo');
+          toast(`${T(d).Uno} "${d.nombre}" cerrado`);
         } catch (err) {
           st.ocupado = false; render();
-          toast(errorAMensaje(err, 'cerrar el despacho'));
+          toast(errorAMensaje(err, `cerrar el ${T(d).uno}`));
         }
         break;
       }
@@ -853,8 +1161,8 @@
         st.ocupado = true; render();
         try {
           await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'proceso'; x.cerrado = null; });
-          toast('Despacho reabierto');
-        } catch (err) { toast(errorAMensaje(err, 'reabrir el despacho')); }
+          toast(`${T(d).Uno} reabierto`);
+        } catch (err) { toast(errorAMensaje(err, `reabrir el ${T(d).uno}`)); }
         st.ocupado = false; render();
         break;
       }
@@ -865,18 +1173,34 @@
 
   document.addEventListener('input', e => {
     const t = e.target;
-    if (t.id === 'nombre') {
-      st.nombre = t.value;
-      const { nombre, quitados } = nombreCarpeta(st.nombre, new Date());
-      document.getElementById('ruta').innerHTML = vistaRuta(nombre, quitados);
-      document.getElementById('crear').disabled = st.ocupado || st.nombre.trim().length < 3;
+    if (t.id && t.id.startsWith('nuevo-')) {
+      st.nuevo[t.dataset.campo] = t.value;
+      if (t.dataset.campo === 'nombre') {
+        const { nombre, quitados } = nombreCarpeta(t.value, new Date());
+        document.getElementById('ruta').innerHTML = vistaRuta(nombre, quitados);
+      }
+      document.getElementById('crear').disabled = st.ocupado || (st.nuevo.nombre || '').trim().length < 3;
     } else if (t.id === 'q' || t.id === 'desde' || t.id === 'hasta') {
       st[t.id] = t.value;
       document.getElementById('lista').innerHTML = listaRegistro();
     }
   });
+  // Datos y observaciones del registro abierto: se guardan al salir del campo.
+  document.addEventListener('change', e => {
+    const t = e.target;
+    const d = buscar(vista.id);
+    if (!d || st.view !== 'despacho') return;
+    if (t.id && t.id.startsWith('det-')) {
+      const v = t.value.trim();
+      if ((d[t.dataset.campo] || '') !== v) { guardarDetalles(d.id, { [t.dataset.campo]: v }); toast('Guardado'); }
+    } else if (t.dataset.obs) {
+      guardarDetalles(d.id, { inspeccion: { [t.dataset.obs]: { obs: t.value.trim() } } });
+      toast('Guardado');
+    }
+  });
   document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.id === 'nombre') document.getElementById('crear').click();
+    if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
+    if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
     if (e.key === 'Escape' && st.menu) { st.menu = false; render(); }
   });
 
@@ -890,7 +1214,7 @@
     await demoCargar();
     await cargarRegistro();
     await refrescarCola();
-    ir('home');
+    ir('areas');
     procesarCola();
   }
 
@@ -913,9 +1237,9 @@
     st.rol = permitidos[(cuenta.username || '').toLowerCase()] || null;
     if (!st.rol) { ir('sinacceso'); return; }
 
-    registro = cache.leer('registro.' + cuenta.username) || { despachos: [] };
+    registro = aplicarPendientes(cache.leer('registro.' + cuenta.username) || { despachos: [] });
     await refrescarCola();
-    ir('home');
+    ir('areas');
     try { await cargarRegistro(); refrescar(); }
     catch (e) { if (!(e instanceof SinSenal)) { console.error(e); toast('No se pudo actualizar el registro desde OneDrive.'); } }
     procesarCola();

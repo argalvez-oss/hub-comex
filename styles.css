@@ -102,6 +102,64 @@ main.wrap { padding-top: 20px; padding-bottom: calc(110px + env(safe-area-inset-
 .card .meta { color: var(--muted); font-size: 13px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-variant-numeric: tabular-nums; }
 .icon-btn { width: 40px; height: 40px; border-radius: 11px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; color: var(--brand); flex: none; }
 
+/* Inicio: elegir área (como en el Hub de Recepción) */
+.areas-wrap { max-width: 1040px; }
+.areas-head { text-align: center; padding-top: 18px; }
+.areas-wrap > .note { max-width: 760px; width: 100%; margin: 0 auto; }
+.areas-head h1 { font-size: clamp(26px, 5vw, 34px); }
+.areas-head p { color: var(--muted); font-size: 17px; margin-top: 6px; }
+.areas { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; max-width: 760px; width: 100%; margin: 6px auto 0; }
+.area { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 34px 20px 26px; box-shadow: 0 2px 10px rgba(20, 40, 30, .06); transition: transform .15s, box-shadow .15s; }
+.area:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(20, 40, 30, .1); }
+.area-ic { width: 72px; height: 72px; border-radius: 22px; background: var(--soft-brand); color: var(--brand); display: grid; place-items: center; margin-bottom: 8px; }
+.area-ic svg { width: 40px; height: 40px; stroke-width: 1.7; }
+.area b { font-family: var(--f-display); font-size: 24px; }
+.area small { color: var(--muted); font-size: 14.5px; }
+.area-n { margin-top: 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 4px 12px; }
+.area-n em { font-style: normal; color: var(--accent); }
+.areas-btn { display: flex; align-items: center; gap: 2px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px 6px 6px; font-weight: 600; font-size: 13px; color: var(--muted); flex: none; }
+
+/* Fotos que siguen en el celular, esperando "Subir" */
+.stage { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-radius: var(--r); padding: 13px 14px; background: var(--soft-accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.stage-tx { flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.stage-tx b { font-size: 15px; }
+.stage .btn { flex: 0 0 auto; }
+.tile .st.local { width: auto; height: auto; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 700; background: #d9861c; color: #fff; }
+.tile.draft { outline: 2px dashed #d9861c; outline-offset: -2px; }
+
+/* Módulos de inicio (Despachos / Traslados) */
+.mod { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
+.mod-ic { width: 52px; height: 52px; border-radius: 15px; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; flex: none; }
+.mod-ic svg { width: 28px; height: 28px; }
+.mod-tx { flex: 1; min-width: 0; }
+.mod-tx b { display: block; font-family: var(--f-display); font-size: 21px; }
+.mod-tx small { color: var(--muted); font-size: 13.5px; }
+.mod > svg { color: var(--muted); }
+
+/* Secciones plegables del registro (datos, inspección) */
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.sec summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 14px; cursor: pointer; font-family: var(--f-display); font-weight: 700; font-size: 17px; }
+.sec summary::-webkit-details-marker { display: none; }
+.sec summary > span:first-child { flex: 1; }
+.sec summary > svg { color: var(--muted); transition: transform .2s; }
+.sec[open] summary > svg { transform: rotate(90deg); }
+.prog { font-family: var(--f-body); font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--soft-accent); color: var(--accent); white-space: nowrap; }
+.prog.ok { background: var(--soft-brand); color: var(--brand); }
+.sec-in { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.form-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 520px) { .form-grid { grid-template-columns: 1fr 1fr; } }
+.req { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 4px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13.5px; }
+.kv span { color: var(--muted); }
+.insp-row { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; align-items: center; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.insp-n { font-size: 14.5px; min-width: 0; }
+.insp-row .obs { grid-column: 1 / -1; font-size: 15px; padding: 10px 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 9px 16px; font-weight: 600; min-width: 54px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[data-v="si"][aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
+.seg button[data-v="no"][aria-pressed="true"] { background: var(--danger); color: #fff; }
+
 /* Nuevo */
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field label { font-weight: 600; }
@@ -193,6 +251,7 @@ main.wrap { padding-top: 20px; padding-bottom: calc(110px + env(safe-area-inset-
 .nav-in { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 6px 16px; }
 .nav-b { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 6px; }
 .nav-b[aria-current="page"] { color: var(--brand); }
+.nav-in.tres { grid-template-columns: 1fr 1fr 1fr; padding-block: 4px; }
 .nav-plus { width: 54px; height: 54px; border-radius: 17px; background: var(--brand); color: var(--brand-ink); border: 0; display: grid; place-items: center; margin-top: -22px; box-shadow: 0 6px 16px color-mix(in srgb, var(--brand) 35%, transparent); }
 .nav-plus svg { width: 26px; height: 26px; }
 
