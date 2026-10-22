@@ -197,9 +197,7 @@
     const si = { v: 'si' };
     const ejemplos = [
       ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, 'Goya Foods Inc.', 'Jersey City, EE. UU.'],
-      ['despacho', 'Puré de banano orgánico contenedor B12', 6, 41, 'Hipp GmbH', 'Hamburgo, Alemania'],
-      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, '', 'Bodega Guayaquil'],
-      ['despacho', 'Pulpa guanábana Goya contenedor G4', 18, 33, 'Goya Foods Inc.', 'Miami, EE. UU.']
+      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, '', 'Bodega Guayaquil']
     ];
     const lista = ejemplos.map(([tipo, nombre, dias, fotos, cliente, destino]) => {
       const fecha = new Date(Date.now() - dias * 864e5);
@@ -215,7 +213,7 @@
     demo.registro = JSON.stringify({ despachos: lista });
   }
   // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
-  const demoClave = () => 'demo.datos.v2.' + cuenta.username;
+  const demoClave = () => 'demo.datos.v3.' + cuenta.username;
   function demoGuardar() {
     cache.guardar(demoClave(), {
       n: demo.n, registro: demo.registro,
