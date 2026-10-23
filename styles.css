@@ -185,8 +185,30 @@ textarea.input { resize: vertical; min-height: 96px; line-height: 1.45; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { border: 0; background: var(--surface); padding: 9px 16px; font-weight: 600; min-width: 54px; }
 .seg button + button { border-left: 1px solid var(--line); }
-.seg button[data-v="si"][aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
+.seg button[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
 .seg button[data-v="no"][aria-pressed="true"] { background: var(--danger); color: #fff; }
+
+/* Lista desplegable propia (mismo estilo que el resto de la app) */
+.sel { position: relative; }
+.sel-btn { display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer; font-family: var(--f-body); font-size: 16px; color: var(--ink); }
+.sel-btn span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel-btn span.ph { color: var(--muted); }
+.sel-btn svg { color: var(--muted); transform: rotate(90deg); transition: transform .15s; flex: none; }
+.sel.open .sel-btn { border-color: var(--brand); }
+.sel.open .sel-btn svg { transform: rotate(-90deg); }
+.sel-pop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 45; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px rgba(20, 35, 28, .16); padding: 6px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; animation: pop .12s ease-out; }
+@keyframes pop { from { opacity: 0; transform: translateY(-4px); } }
+.sel-op { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 10px; padding: 11px 12px; font-family: var(--f-body); font-size: 15px; color: var(--ink); }
+.sel-op span { flex: 1; min-width: 0; }
+.sel-op:hover, .sel-op:focus-visible { background: var(--bg); outline: none; }
+.sel-op[aria-selected="true"] { background: var(--line); font-weight: 600; }
+.sel-op svg { width: 18px; height: 18px; color: var(--brand); flex: none; }
+.sel-op.otro { color: var(--muted); border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; margin-top: 4px; padding-top: 12px; }
+.link.mini { font-size: 12.5px; font-weight: 600; margin-left: 6px; }
+
+/* Eliminar registro */
+.btn.ghost.danger { color: var(--danger); margin-top: 6px; }
+.btn.peligro { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 /* Nuevo */
 .field { display: flex; flex-direction: column; gap: 7px; }

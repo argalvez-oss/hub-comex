@@ -112,6 +112,7 @@
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
     logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>',
     spin: '<path d="M12 3a9 9 0 1 0 9 9"/>',
+    trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
     star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9z"/>'
   };
   const ic = n => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -233,44 +234,15 @@
     }
     return c;
   }
+  // Sin OneDrive: arranca vacío, solo con las carpetas de Despachos y Traslados.
   function demoSemilla() {
     const raiz = demoCarpeta(RAIZ, null).id;
-    const sub = { despacho: demoCarpeta('Despachos', raiz).id, traslado: demoCarpeta('Traslados', raiz).id };
-    const si = { v: 'si' };
-    const comun = {
-      lugarCarga: 'ITULCACHI, PIFO, QUITO', responsable: 'Ana Pérez', ci: '1712345678', transportista: 'Transportes del Litoral',
-      conductor: 'Luis Mora', cedula: '0912345678', placa: 'GBA-1234', tipoUnidad: 'reefer', capacidad: "40'",
-      tInicial: '-18', tFinal: '-19', setPoint: '-20', termografo: 'TG-8841',
-      selloNaviera: 'ML-998877', selloBotella: 'HF-0455', selloCable: 'C-2201', sticker: 'ST-12',
-      observaciones: 'Carga sin novedades.', jefeCalidad: 'María López', respSellos: 'Carlos Ruiz', bodega1: 'Pedro Gómez', bodega2: 'José Vera',
-      inspeccion: { exterior: si, interior: si, piso: si, refrigeracion: si, llantas: si, apta: si }, informeFotos: []
-    };
-    const ejemplos = [
-      ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, {
-        cliente: 'GOYA USA', destino: 'NEW YORK, NY, USA', destinoFinal: 'NEWARK, NJ, USA', pedido: '267-261523', factura: '001-001-000123',
-        contenedor: 'MSKU 123456-7', naviera: 'Hapag Lloyd', totalCajas: '2000', totalPallets: '20',
-        productos: [{ producto: 'MANGO PULP 12X14 OZ', codigo: 'PTEXP001', cantidad: '1200' }, { producto: 'PASSION FRUIT PULP 12X14 OZ', codigo: 'PTEXP007', cantidad: '800' }]
-      }],
-      ['traslado', 'Pulpa maracuyá a bodega Durán', 8, 12, {
-        cliente: 'GOYA USA', destino: 'ECLA, DURÁN', destinoFinal: 'ECLA, DURÁN', pedido: '', factura: '',
-        contenedor: '', naviera: '', tipoUnidad: 'camion', totalCajas: '600', totalPallets: '6',
-        productos: [{ producto: 'PASSION FRUIT PULP 12X14 OZ', codigo: 'PTEXP007', cantidad: '600' }]
-      }]
-    ];
-    const lista = ejemplos.map(([tipo, nombre, dias, fotos, extra]) => {
-      const fecha = new Date(Date.now() - dias * 864e5);
-      const fin = new Date(fecha.getTime() + 3 * 36e5);
-      const c = demoCarpeta(nombreCarpeta(nombre, fecha).nombre, sub[tipo]);
-      demo.carpetas.get(c.id).fotos = Array.from({ length: fotos }, (_, i) => ({ id: c.id + '-' + i, name: `Foto_${pad3(i + 1)}.jpg` }));
-      return {
-        id: c.id, tipo, nombre, carpeta: c.name, webUrl: '#', fecha: fecha.toISOString(), estado: 'cerrado', cerrado: fin.toISOString(), fotos,
-        ...JSON.parse(JSON.stringify(comun)), ...extra
-      };
-    });
-    demo.registro = JSON.stringify({ despachos: lista });
+    demoCarpeta('Despachos', raiz);
+    demoCarpeta('Traslados', raiz);
+    demo.registro = JSON.stringify({ despachos: [] });
   }
   // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
-  const demoClave = () => 'demo.datos.v5.' + cuenta.username;
+  const demoClave = () => 'demo.datos.v6'; // compartido entre Ventas y Soporte en este dispositivo
   function demoGuardar() {
     cache.guardar(demoClave(), {
       n: demo.n, registro: demo.registro,
@@ -325,6 +297,13 @@
       return { value: c.fotos.map(f => ({ id: f.id, name: f.name, file: {}, thumbnails: f.url ? [{ medium: { url: f.url } }] : [] })) };
     }
     if ((m = /^\/me\/drive\/items\/([^/:?]+)$/.exec(ruta)) && metodo === 'DELETE') {
+      const carpeta = demo.carpetas.get(m[1]);
+      if (carpeta) { // eliminar un registro completo con sus fotos
+        for (const f of carpeta.fotos) await idb.guardar('demofoto.' + f.id, null);
+        demo.carpetas.delete(m[1]);
+        demoGuardar();
+        return null;
+      }
       for (const c of demo.carpetas.values()) {
         const i = c.fotos.findIndex(f => f.id === m[1]);
         if (i < 0) continue;
@@ -345,7 +324,9 @@
 
   // ---------- Registro (despachos y traslados) ----------
   let registro = { despachos: [] };
-  const clavePend = () => 'pendientes.' + cuenta.username;
+  // En modo prueba Ventas y Soporte comparten los datos del dispositivo; con Microsoft, cada cuenta usa su OneDrive.
+  const usuarioDatos = () => (DEMO ? 'compartido' : cuenta.username);
+  const clavePend = () => 'pendientes.' + usuarioDatos();
 
   // Une cambios de datos/inspección sobre un registro (la inspección se mezcla punto por punto).
   function mezclar(obj, cambio) {
@@ -382,7 +363,7 @@
   }
   async function cargarRegistro() {
     registro = aplicarPendientes(await leerRegistro());
-    cache.guardar('registro.' + cuenta.username, registro);
+    cache.guardar('registro.' + usuarioDatos(), registro);
     return registro;
   }
   // Lee lo último de OneDrive, aplica los cambios pendientes y el cambio pedido, y lo guarda.
@@ -393,7 +374,7 @@
     await graph(REGISTRO + ':/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 1) });
     if (JSON.stringify(cache.leer(clavePend()) || {}) === pendAntes) cache.quitar(clavePend());
     registro = aplicarPendientes(data);
-    cache.guardar('registro.' + cuenta.username, registro);
+    cache.guardar('registro.' + usuarioDatos(), registro);
   }
   const buscar = id => registro.despachos.find(d => d.id === id);
 
@@ -405,7 +386,7 @@
     const pend = cache.leer(clavePend()) || {};
     pend[id] = mezclar(pend[id] || {}, JSON.parse(JSON.stringify(cambio)));
     cache.guardar(clavePend(), pend);
-    cache.guardar('registro.' + cuenta.username, registro);
+    cache.guardar('registro.' + usuarioDatos(), registro);
     sincronizar();
   }
   let sincronizando = false, otraVez = false;
@@ -467,7 +448,7 @@
   const recientes = new Map(); // nombre del archivo subido → URL local (mientras OneDrive genera la miniatura)
 
   async function refrescarCola() {
-    cola = (await idb.cola()).filter(x => x.cuenta === cuenta.username).sort((a, b) => a.creado - b.creado);
+    cola = (await idb.cola()).filter(x => x.cuenta === usuarioDatos()).sort((a, b) => a.creado - b.creado);
     for (const it of cola) if (!urlsCola.has(it.id)) urlsCola.set(it.id, URL.createObjectURL(it.blob));
   }
   const pendientesDe = id => cola.filter(x => x.despachoId === id);
@@ -547,7 +528,7 @@
     for (const it of items) {
       n++;
       await idb.poner({
-        id: uid(), cuenta: cuenta.username, despachoId: d.id, folderId: d.id, despacho: d.nombre,
+        id: uid(), cuenta: usuarioDatos(), despachoId: d.id, folderId: d.id, despacho: d.nombre,
         archivo: `Foto_${pad3(n)}.${it.ext}`, blob: it.blob, creado: Date.now(), listo: false
       });
     }
@@ -639,7 +620,7 @@
     return { fotos, faltan };
   }
   async function descargarInforme(d) {
-    if (window.HUB_DEMO) { toast('En esta vista de prueba no se pueden descargar archivos. Usa la app publicada en GitHub.'); return; }
+    if (window.HUB_DEMO) { toast('Desde este enlace no se pueden descargar archivos. Usa la app publicada en GitHub.'); return; }
     st.generando = d.id; render();
     try {
       await cargarLibreriaWord();
@@ -670,7 +651,9 @@
   const st = {
     view: 'boot', tipo: 'despacho', prev: 'modulo', rol: null, menu: false, revision: null, ocupado: false,
     nuevo: {}, q: '', desde: '', hasta: '', estado: 'todos', error: null, abiertos: {}, borrar: null, generando: null,
-    libre: {} // campos de lista donde se eligió "Otro (escribir)"
+    libre: {}, // campos de lista donde se eligió "Otro (escribir)"
+    sel: null, // lista desplegable abierta
+    eliminar: null // registro que se está por eliminar (pide confirmación)
   };
   let vista = { id: null, nube: [], cargando: false, error: null };
   const EN_AREA = ['modulo', 'nuevo', 'registros', 'despacho'];
@@ -784,13 +767,12 @@
         <span class="meta">${sub} <span class="pill ${d.estado}">${d.estado === 'proceso' ? 'En proceso' : 'Cerrado'}</span></span>
       </button>
       <button class="icon-btn" data-act="informe" data-id="${esc(d.id)}" aria-label="Descargar informe en Word" title="Informe Word">${st.generando === d.id ? ic('spin') : ic('doc')}</button>
-      <a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>
+      ${DEMO ? '' : `<a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>`}
     </div>`;
   }
   function notas() {
     const pend = enCola().length;
-    return `${DEMO ? `<div class="note info">${ic('info')}<span><b>Versión de prueba.</b> Los registros y fotos se guardan solo en este dispositivo; todavía no se suben a OneDrive.</span></div>` : ''}
-      ${st.rol === 'soporte' ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
+    return `${st.rol === 'soporte' && !DEMO ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
       ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo…'}</span></div>` : ''}`;
   }
 
@@ -905,6 +887,21 @@
       return vals.length ? `<datalist id="dl-${k}">${vals.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>` : '';
     }).join('');
   }
+  // Lista desplegable propia (en lugar de la del navegador), con el mismo estilo de la app.
+  function selector(id, valor, opciones, placeholder) {
+    const abierto = st.sel === id;
+    const elegido = opciones.find(o => !o.otro && norm(o.v) === norm(valor));
+    const texto = elegido ? elegido.l : valor || '';
+    return `<div class="sel ${abierto ? 'open' : ''}">
+      <button type="button" class="input sel-btn" id="${id}" data-act="abrirsel" data-id="${id}" aria-haspopup="listbox" aria-expanded="${abierto}">
+        <span class="${texto ? '' : 'ph'}">${esc(texto || placeholder)}</span>${ic('chev')}
+      </button>
+      ${abierto ? `<div class="sel-pop" role="listbox">${opciones.map(o => {
+        const activo = !o.otro && norm(o.v) === norm(valor);
+        return `<button type="button" class="sel-op ${o.otro ? 'otro' : ''}" role="option" aria-selected="${activo}" data-act="elegir" data-id="${id}" data-v="${esc(o.v)}"><span>${esc(o.l)}</span>${activo ? ic('check') : ''}</button>`;
+      }).join('')}</div>` : ''}
+    </div>`;
+  }
   function campo(def, valor, prefijo) {
     const [k, etiqueta, ej, o = {}] = def;
     const id = `${prefijo}-${k}`;
@@ -915,11 +912,7 @@
     const opciones = o.lista ? opcionesLista(def) : [];
     if (o.lista && opciones.length && !st.libre[id]) {
       return `<div class="field"><label for="${id}">${etiqueta}</label>
-        <select class="input" id="${id}" data-campo="${k}">
-          <option value="">Elegir…</option>
-          ${opciones.map(v => `<option value="${esc(v)}" ${norm(v) === norm(valor) ? 'selected' : ''}>${esc(v)}</option>`).join('')}
-          <option value="${OTRO}">Otro (escribir)</option>
-        </select></div>`;
+        ${selector(id, valor, [...opciones.map(v => ({ v, l: v })), { v: OTRO, l: 'Otro (escribir)', otro: true }], 'Elegir…')}</div>`;
     }
     return `<div class="field"><label for="${id}">${etiqueta}${o.lista && opciones.length ? ` <button class="link mini" data-act="alista" data-id="${id}">Elegir de la lista</button>` : ''}</label>
       <input class="input" id="${id}" data-campo="${k}" ${o.lista ? '' : `list="dl-${k}"`} autocomplete="off" ${o.num ? 'inputmode="numeric"' : ''} placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
@@ -1009,11 +1002,8 @@
     // Con un cliente del catálogo: solo se puede elegir entre sus productos. Sin cliente del catálogo: se escribe.
     const selProducto = (p, i) => {
       const fuera = p.producto && !lista.some(x => norm(x.producto) === norm(p.producto));
-      return `<select class="input p-prod" data-prod="producto" data-i="${i}" aria-label="Producto ${i + 1}">
-        <option value="">Elegir producto…</option>
-        ${fuera ? `<option value="${esc(p.producto)}" selected>${esc(p.producto)} (no es de este cliente)</option>` : ''}
-        ${lista.map(x => `<option value="${esc(x.producto)}" ${norm(x.producto) === norm(p.producto) ? 'selected' : ''}>${esc(x.producto)}</option>`).join('')}
-      </select>`;
+      return `<div class="p-prod">${selector(`prod-${i}`, fuera ? `${p.producto} (no es de este cliente)` : p.producto,
+        lista.map(x => ({ v: x.producto, l: x.producto })), 'Elegir producto…')}</div>`;
     };
     return `${lista.length ? `<p class="help">Productos de <b>${esc(d.cliente)}</b>. Al elegir uno, el código se llena solo.</p>`
         : d.cliente ? `<p class="help"><b>${esc(d.cliente)}</b> no tiene productos en la lista; escríbelos.</p>`
@@ -1097,11 +1087,28 @@
       ${sugerencias(d)}
       <div class="row">
         <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
-        <a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>
+        ${DEMO ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>`}
       </div>
       ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
         ${borradores ? `<p class="help">Para cerrar, primero sube las ${borradores} ${borradores === 1 ? 'foto' : 'fotos'} que están en el celular o elimínalas.</p>` : ''}` : ''}
+      <button class="btn block ghost danger" data-act="preeliminar" ${st.ocupado ? 'disabled' : ''}>${ic('trash')}Eliminar ${t.uno}</button>
     </main>`;
+  }
+
+  // Confirmación para eliminar un despacho o traslado completo.
+  function vEliminar() {
+    const d = st.eliminar && buscar(st.eliminar);
+    if (!d) return '';
+    const t = T(d);
+    const nFotos = Math.max(d.fotos || 0, vista.id === d.id ? vista.nube.length : 0) + pendientesDe(d.id).length;
+    return `<div class="sheet-bg" data-act="noeliminar"><div class="sheet" data-stop>
+      <span class="eyebrow">Eliminar ${t.uno}</span>
+      <h2 style="font-size:20px">¿Eliminar "${esc(d.nombre)}"?</h2>
+      <p class="help">Se borran el registro${nFotos ? `, sus datos y ${nFotos === 1 ? 'su foto' : `sus ${nFotos} fotos`}` : ' y sus datos'}.
+        ${DEMO ? 'Esta acción no se puede deshacer.' : 'La carpeta queda en la papelera de OneDrive por si fue un error.'}</p>
+      <button class="btn block primary peligro" data-act="eliminar" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Eliminando…' : ic('trash') + 'Sí, eliminar'}</button>
+      <button class="btn block" data-act="noeliminar">Cancelar</button>
+    </div></div>`;
   }
 
   // Aviso al cerrar si falta algo: solo informa; se puede cerrar igual.
@@ -1167,7 +1174,7 @@
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
     const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
-    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu() + vAvisoCierre();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu() + vAvisoCierre() + vEliminar();
   }
 
   // ---------- Vista de un registro ----------
@@ -1221,17 +1228,64 @@
     if (s) st.abiertos[s.dataset.sec] = s.open;
   }, true);
 
-  document.addEventListener('click', async e => {
-    if (DEMO && e.target.closest('a[target="_blank"]')) {
-      e.preventDefault();
-      toast('En la app real, este botón abre la carpeta en OneDrive.');
-      return;
+  // Valor elegido en una lista desplegable propia.
+  function elegirValor(id, v) {
+    st.sel = null;
+    if (v === OTRO) { if (id.startsWith('nuevo-')) st.nuevo[id.slice(6)] = ''; escribirOtro(id); return; }
+    if (id.startsWith('nuevo-')) { st.nuevo[id.slice(6)] = v; render(); return; }
+    const d = buscar(vista.id);
+    if (!d) { render(); return; }
+    if (id.startsWith('prod-')) {
+      // Producto: se guarda y su código se llena solo.
+      const i = +id.slice(5);
+      const prods = (d.productos && d.productos.length ? d.productos : [{}]).map(p => ({ ...p }));
+      prods[i] = { ...(prods[i] || {}), producto: v, codigo: codigoDe(d.cliente, v) || (prods[i] || {}).codigo || '' };
+      guardarDetalles(d.id, { productos: prods });
+    } else if (id.startsWith('det-')) {
+      guardarDetalles(d.id, { [id.slice(4)]: v });
     }
+    toast('Guardado');
+    render();
+  }
+
+  document.addEventListener('click', async e => {
     if (e.target.closest('[data-stop]') && !e.target.closest('[data-act]')) return;
     const b = e.target.closest('[data-act]');
+    // Un clic fuera de la lista abierta la cierra.
+    if (st.sel && !(b && ['abrirsel', 'elegir'].includes(b.dataset.act))) { st.sel = null; render(); if (!b) return; }
     if (!b) return;
     const d = buscar(vista.id);
     switch (b.dataset.act) {
+      case 'abrirsel': {
+        st.sel = st.sel === b.dataset.id ? null : b.dataset.id;
+        render();
+        if (st.sel) setTimeout(() => document.querySelector('.sel.open .sel-pop')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 20);
+        break;
+      }
+      case 'elegir': elegirValor(b.dataset.id, b.dataset.v); break;
+      case 'preeliminar': st.eliminar = d.id; render(); break;
+      case 'noeliminar': if (e.target === b || b.tagName === 'BUTTON') { st.eliminar = null; render(); } break;
+      case 'eliminar': {
+        const x = buscar(st.eliminar);
+        if (!x) break;
+        st.ocupado = true; render();
+        try {
+          try { await graph(`/me/drive/items/${x.id}`, { method: 'DELETE' }); }
+          catch (err) { if (err.status !== 404) throw err; } // si la carpeta ya no estaba, igual se quita del registro
+          for (const it of pendientesDe(x.id)) { await idb.quitar(it.id); urlsCola.delete(it.id); }
+          await refrescarCola();
+          const pend = cache.leer(clavePend()) || {};
+          if (pend[x.id]) { delete pend[x.id]; cache.guardar(clavePend(), pend); }
+          await cambiarRegistro(reg => { reg.despachos = reg.despachos.filter(y => y.id !== x.id); });
+          st.ocupado = false; st.eliminar = null;
+          ir(st.prev === 'registros' ? 'registros' : 'modulo');
+          toast(`${T(x).Uno} "${x.nombre}" eliminado`);
+        } catch (err) {
+          st.ocupado = false; render();
+          toast(errorAMensaje(err, `eliminar el ${T(x).uno}`));
+        }
+        break;
+      }
       case 'ingresar':
         if (DEMO) { st.opcionesDemo = true; render(); } else ingresar();
         break;
@@ -1480,7 +1534,7 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
     if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
-    if (e.key === 'Escape' && st.menu) { st.menu = false; render(); }
+    if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar)) { st.menu = false; st.sel = null; st.eliminar = null; render(); }
   });
 
   // ---------- Arranque ----------
@@ -1516,7 +1570,7 @@
     st.rol = permitidos[(cuenta.username || '').toLowerCase()] || null;
     if (!st.rol) { ir('sinacceso'); return; }
 
-    registro = aplicarPendientes(cache.leer('registro.' + cuenta.username) || { despachos: [] });
+    registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
     await refrescarCola();
     ir('areas');
     try { await cargarRegistro(); refrescar(); }
