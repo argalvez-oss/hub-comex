@@ -112,7 +112,7 @@
         // Las horas las escribe Ventas a mano en el Word.
         ['Cliente', v('cliente'), 'Hora de inicio', ''],
         ['Destino', v('destino'), 'Hora de fin', ''],
-        ['Lugar de carga', v('lugarCarga'), 'Destino final', v('destinoFinal')],
+        ['Lugar de carga', v('lugarCarga')],
         ['Pedido / OC', v('pedido'), 'Factura / DAE', v('factura')],
         ['Responsable', v('responsable'), 'C.I.', v('ci')],
         ['Carpeta de fotos', [linkCarpeta()]]

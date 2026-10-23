@@ -41,7 +41,6 @@
       ['cliente', 'Cliente', 'Ej. Goya Foods Inc.', { lista: 'clientes' }],
       ['destino', 'Destino', 'Ej. Jersey City, EE. UU.', { lista: 'destinos' }],
       ['lugarCarga', 'Lugar de carga', 'Ej. Planta Quevedo', { lista: 'lugaresCarga' }],
-      ['destinoFinal', 'Destino final', 'Ej. Secaucus, NJ', { lista: 'destinos' }],
       ['pedido', 'Pedido / OC', 'Ej. 267-261523'],
       ['factura', 'Factura / DAE', 'Ej. 001-001-000123'],
       ['responsable', 'Responsable', 'Nombre de quien despacha'],
