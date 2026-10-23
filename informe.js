@@ -26,6 +26,7 @@
   const deBase64 = s => (typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(s, 'base64')) : Uint8Array.from(atob(s), c => c.charCodeAt(0)));
   const pad = n => String(n).padStart(2, '0');
   const fecha = v => { if (!v) return ''; const d = new Date(v); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
+  const hora = v => { if (!v) return ''; const d = new Date(v); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   // Ajusta una imagen dentro de un recuadro (en píxeles) sin deformarla.
   const encajar = (w, h, maxW, maxH) => { const k = Math.min(maxW / w, maxH / h); return { width: Math.round(w * k), height: Math.round(h * k) }; };
 
@@ -111,9 +112,9 @@
       seccion('DATOS GENERALES'),
       pares([
         ['Operación', [casilla(!esTraslado), texto(' Exportación     '), casilla(esTraslado), texto(' Traslado')], 'Fecha', fecha(reg.fecha)],
-        // Las horas las escribe Ventas a mano en el Word.
-        ['Cliente', v('cliente'), 'Hora de inicio', ''],
-        ['Destino', v('destino'), 'Hora de fin', ''],
+        // Hora de inicio: cuando se creó el registro. Hora de fin: cuando se cerró (vacía si sigue en proceso).
+        ['Cliente', v('cliente'), 'Hora de inicio', hora(reg.creado || reg.fecha)],
+        ['Destino', v('destino'), 'Hora de fin', reg.estado === 'cerrado' ? hora(reg.cerrado) : ''],
         ['Lugar de carga', v('lugarCarga')],
         ['Pedido / OC', v('pedido'), 'Factura / DAE', v('factura')],
         ['Responsable', v('responsable'), 'C.I.', v('ci')],
