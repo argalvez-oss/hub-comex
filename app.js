@@ -741,7 +741,7 @@
     const enArea = EN_AREA.includes(st.view);
     return `<header class="top ${ancho ? 'wide' : ''}"><div class="top-in">
       ${enArea
-        ? `<button class="areas-btn" data-act="areas" aria-label="Volver a elegir área">${ic('back')}<span>Áreas</span></button>
+        ? `<button class="areas-btn" data-act="areas" aria-label="Volver al inicio">${ic('back')}<span>Inicio</span></button>
            <div class="top-name">${T(st.tipo).plural}<small>Hub Comex</small></div>`
         : `<div class="mark">HC</div><div class="top-name">Hub Comex<small>Área de Ventas</small></div>`}
       <button class="who" data-act="menu" aria-label="Cuenta"><span class="ava">${esc(nombre.trim()[0] || 'V').toUpperCase()}</span><span>${esc(nombre.split(' ')[0])}</span></button>
@@ -752,7 +752,7 @@
     const v = st.view;
     const t = T(st.tipo);
     return `<nav class="nav" aria-label="${t.plural}"><div class="nav-in">
-      <button class="nav-b" data-act="ir" data-v="modulo" ${v === 'modulo' ? 'aria-current="page"' : ''}>${ic('home')}Inicio</button>
+      <button class="nav-b" data-act="ir" data-v="modulo" ${v === 'modulo' ? 'aria-current="page"' : ''}>${ic(st.tipo === 'traslado' ? 'swap' : 'truck')}${t.plural}</button>
       <button class="nav-plus" data-act="nuevo" aria-label="Nuevo ${t.uno}">${ic('plus')}</button>
       <button class="nav-b" data-act="registros" ${v === 'registros' ? 'aria-current="page"' : ''}>${ic('list')}Registros</button>
     </div></nav>`;
@@ -789,7 +789,7 @@
       </button>`;
     };
     return `<main class="wrap areas-wrap">
-      <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>Elige el área</p></div>
+      <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>¿Qué vas a registrar hoy?</p></div>
       ${notas()}
       <div class="areas">
         ${area('despacho', 'truck', 'Exportación de producto · fotos e informe')}
@@ -1059,7 +1059,7 @@
     });
     const tiles = tilesCola.concat(tilesNube);
     return `<main class="wrap">
-      <button class="btn ghost back" data-act="volver">${ic('back')}${st.prev === 'registros' ? 'Registros' : 'Inicio'}</button>
+      <button class="btn ghost back" data-act="volver">${ic('back')}${st.prev === 'registros' ? 'Registros' : t.plural}</button>
       <div class="d-head">
         <span class="eyebrow">${t.Uno}</span>
         <h1>${esc(d.nombre)}</h1>
