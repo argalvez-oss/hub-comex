@@ -1,11 +1,11 @@
 // Service worker: guarda la app en el celular para que abra rápido y sin señal.
 // Al publicar cambios, subir VERSION para que los celulares descarguen la nueva versión.
-const VERSION = 'hc-v6';
+const VERSION = 'hc-v7';
 const MSAL = 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@4.12.0/lib/msal-browser.min.js';
 const DOCX = 'https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'informe.js', 'config.js', 'manifest.webmanifest',
-  'icons/icon-192.png', 'icons/icon-512.png', MSAL, DOCX
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/logo-hf.png', MSAL, DOCX
 ];
 const EXTERNOS = [MSAL, DOCX];
 

@@ -6,9 +6,10 @@ App del área de Ventas para registrar **despachos y traslados**: fotos directo 
 - **Fotos:** se guardan en el OneDrive de quien ingresa, en `Hub Comex/Despachos/AAAA-MM-DD - <nombre>/Foto_001.jpg` (o `Hub Comex/Traslados/...`).
 - **Organización:** al ingresar se elige el área (*Despachos* o *Traslados*). Cada área tiene su inicio (nuevo registro y los que están en proceso) y su página de *Registros* (buscar, filtrar y descargar el informe).
 - **Fotos en dos pasos:** las fotos aceptadas quedan en el celular ("sin subir") y se pueden eliminar; con el botón *Subir* pasan a OneDrive (si no hay señal, esperan y se suben solas). No se puede cerrar un registro con fotos sin subir.
-- **Listas para elegir:** `catalogos` en `config.js` (clientes, destinos, lugares de carga, pedidos). Mientras esté vacío, se sugiere lo ya escrito antes.
-- **Datos en la app:** Cliente, Destino, Lugar de carga, Pedido/OC e Inspección previa (6 puntos Sí/No). Fecha, hora de inicio (al crear) y hora de fin (al cerrar) se guardan solas.
-- **Informe Word:** botón *Descargar informe (Word)* en cada registro. El formato está en `informe.js`; si cambia el formato, solo se edita ese archivo.
+- **Listas para elegir:** `catalogos` en `config.js` (clientes, destinos, lugares de carga, transportistas, navieras y productos por cliente con su código). Mientras esté vacío, se sugiere lo ya escrito antes.
+- **Datos en la app:** todos los campos del informe, en 7 secciones plegables con su avance: Datos generales, Transporte y contenedor, Inspección previa, Estiba/sellos/cierre, Detalle de carga (producto filtrado por cliente y código automático), Observaciones y Personal a cargo. Fecha, hora de inicio (al crear) y hora de fin (al cerrar) se guardan solas.
+- **Al cerrar:** si falta algo, sale un aviso con lo que falta; se puede cerrar igual.
+- **Informe Word:** botón *Descargar informe (Word)* en cada registro, con el logo (`icons/logo-hf.png`) y las fotos marcadas con estrella ya colocadas. El formato está en `informe.js`; si cambia el formato, solo se edita ese archivo.
 - **Sin señal:** las fotos aceptadas quedan guardadas en el celular y se suben solas cuando vuelve la conexión, siempre que la app esté abierta.
 - **Registro:** el archivo `_registro-hub-comex.json`, dentro de `OneDrive/Hub Comex`. **No borrarlo ni moverlo.**
 - **Inicio de sesión (temporal):** usa el registro de Azure de *Hub Recepción*, que ya tiene aprobado `Sites.ReadWrite.All`. Cuando un administrador apruebe el registro propio *Hub Comex*, cambiar `clientId` y `permisos` en `config.js` (ahí están las instrucciones).

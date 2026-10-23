@@ -28,11 +28,17 @@ window.HUB_CONFIG = {
 
   // Listas para elegir al llenar los datos (además se puede escribir). Aquí se cargará la base de datos;
   // mientras tanto, la app sugiere lo ya escrito en registros anteriores.
+  // Productos: cada uno con su cliente y código. Al elegir el cliente, solo aparecen sus productos,
+  // y al elegir el producto se llena solo el código.
   catalogos: {
-    cliente: [],
-    destino: [],
-    lugarCarga: [],
-    pedido: []
+    clientes: [],
+    destinos: [],
+    lugaresCarga: [],
+    transportistas: [],
+    navieras: [],
+    productos: [
+      // { cliente: 'Goya Foods Inc.', producto: 'Pulpa de mango 14 oz', codigo: 'PM-014' },
+    ]
   },
 
   // Datos del encabezado del informe en Word (los asigna Calidad / el sistema de gestión).

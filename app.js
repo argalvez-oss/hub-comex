@@ -33,12 +33,53 @@
     traslado: { plural: 'Traslados', uno: 'traslado', Uno: 'Traslado', carpeta: 'Traslados', ej: 'Ej. Pulpa maracuyá a bodega Guayaquil' }
   };
   const T = d => TIPOS[(d && d.tipo) || d] || TIPOS.despacho;
-  const CAMPOS = [
-    ['cliente', 'Cliente', 'Ej. Goya Foods'],
-    ['destino', 'Destino', 'Ej. Jersey City, EE. UU.'],
-    ['lugarCarga', 'Lugar de carga', 'Ej. Planta Quevedo'],
-    ['pedido', 'Pedido / OC', 'Ej. OC-2026-0418']
+  // Campos del informe, por sección, en el mismo orden del formato. Cada campo: [clave, etiqueta, ejemplo, opciones].
+  //   lista: nombre del catálogo de config.js para la lista desplegable · opcional: no cuenta como faltante al cerrar
+  //   num: teclado numérico · opciones: botones para elegir (ej. Reefer / Camión)
+  const SECCIONES = [
+    { id: 'generales', titulo: 'Datos generales', campos: [
+      ['cliente', 'Cliente', 'Ej. Goya Foods Inc.', { lista: 'clientes' }],
+      ['destino', 'Destino', 'Ej. Jersey City, EE. UU.', { lista: 'destinos' }],
+      ['lugarCarga', 'Lugar de carga', 'Ej. Planta Quevedo', { lista: 'lugaresCarga' }],
+      ['destinoFinal', 'Destino final', 'Ej. Secaucus, NJ', { lista: 'destinos' }],
+      ['pedido', 'Pedido / OC', 'Ej. 267-261523'],
+      ['factura', 'Factura / DAE', 'Ej. 001-001-000123'],
+      ['responsable', 'Responsable', 'Nombre de quien despacha'],
+      ['ci', 'C.I.', 'Cédula del responsable', { num: true }]
+    ] },
+    { id: 'transporte', titulo: 'Transporte y contenedor', campos: [
+      ['transportista', 'Transportista', 'Empresa de transporte', { lista: 'transportistas' }],
+      ['conductor', 'Conductor', 'Nombre del conductor'],
+      ['cedula', 'Cédula', 'Cédula del conductor', { num: true }],
+      ['placa', 'Placa', 'Ej. GBA-1234'],
+      ['contenedor', 'Contenedor', 'Ej. MSKU 123456-7'],
+      ['tipoUnidad', 'Tipo', '', { opciones: [['reefer', 'Reefer'], ['camion', 'Camión']] }],
+      ['naviera', 'Naviera', 'Ej. Maersk', { lista: 'navieras' }],
+      ['capacidad', 'Capacidad', "Ej. 40'"],
+      ['tInicial', 'T. inicial (°C)', 'Ej. -18'],
+      ['tFinal', 'T. final (°C)', 'Ej. -19'],
+      ['setPoint', 'Set point (°C)', 'Ej. -20'],
+      ['termografo', 'Termógrafo', 'N.º del termógrafo']
+    ] },
+    { id: 'insp', titulo: 'Inspección previa de la unidad' },
+    { id: 'sellos', titulo: 'Estiba, sellos y cierre', campos: [
+      ['selloNaviera', 'Sello naviera', ''], ['selloBotella', 'Sello botella', ''],
+      ['selloCable', 'Sello cable', ''], ['sticker', 'Sticker', ''],
+      ['otrosSellos', 'Otros sellos', '', { opcional: true }]
+    ] },
+    { id: 'carga', titulo: 'Detalle de carga' },
+    { id: 'obs', titulo: 'Observaciones' },
+    { id: 'personal', titulo: 'Personal a cargo', campos: [
+      ['jefeCalidad', 'Jefe de Calidad', 'Nombre'],
+      ['respSellos', 'Responsable de sellos', 'Nombre'],
+      ['bodega1', 'Bodega', 'Nombre'],
+      ['bodega2', 'Bodega (2)', 'Nombre', { opcional: true }],
+      ['bodega3', 'Bodega (3)', 'Nombre', { opcional: true }]
+    ] }
   ];
+  const CAMPOS = SECCIONES.flatMap(s => s.campos || []);
+  const CAMPO = Object.fromEntries(CAMPOS.map(c => [c[0], c]));
+  const NUEVO_CAMPOS = ['cliente', 'destino', 'lugarCarga', 'pedido'].map(k => CAMPO[k]); // lo básico al crear
   const INSPECCION = (window.HCInforme && window.HCInforme.INSPECCION) || [
     ['exterior', 'Exterior, puertas y estructura'], ['interior', 'Interior limpio, seco y sin olores'],
     ['piso', 'Piso, paredes y techo íntegros'], ['refrigeracion', 'Refrigeración operativa'],
@@ -70,7 +111,8 @@
     redo: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5"/><path d="M4 4v4.5h4.5"/>',
     info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
     logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>',
-    spin: '<path d="M12 3a9 9 0 1 0 9 9"/>'
+    spin: '<path d="M12 3a9 9 0 1 0 9 9"/>',
+    star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9z"/>'
   };
   const ic = n => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -195,25 +237,40 @@
     const raiz = demoCarpeta(RAIZ, null).id;
     const sub = { despacho: demoCarpeta('Despachos', raiz).id, traslado: demoCarpeta('Traslados', raiz).id };
     const si = { v: 'si' };
+    const comun = {
+      lugarCarga: 'Planta Quevedo', responsable: 'Ana Pérez', ci: '1712345678', transportista: 'Transportes del Litoral',
+      conductor: 'Luis Mora', cedula: '0912345678', placa: 'GBA-1234', tipoUnidad: 'reefer', capacidad: "40'",
+      tInicial: '-18', tFinal: '-19', setPoint: '-20', termografo: 'TG-8841',
+      selloNaviera: 'ML-998877', selloBotella: 'HF-0455', selloCable: 'C-2201', sticker: 'ST-12',
+      observaciones: 'Carga sin novedades.', jefeCalidad: 'María López', respSellos: 'Carlos Ruiz', bodega1: 'Pedro Gómez', bodega2: 'José Vera',
+      inspeccion: { exterior: si, interior: si, piso: si, refrigeracion: si, llantas: si, apta: si }, informeFotos: []
+    };
     const ejemplos = [
-      ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, 'Goya Foods Inc.', 'Jersey City, EE. UU.'],
-      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, '', 'Bodega Guayaquil']
+      ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, {
+        cliente: 'Goya Foods Inc.', destino: 'Jersey City, EE. UU.', destinoFinal: 'Secaucus, NJ', pedido: '267-261523', factura: '001-001-000123',
+        contenedor: 'MSKU 123456-7', naviera: 'Maersk', totalCajas: '2000', totalPallets: '20',
+        productos: [{ producto: 'Pulpa de mango 14 oz', codigo: 'PM-014', cantidad: '1200' }, { producto: 'Pulpa de maracuyá 14 oz', codigo: 'PMR-014', cantidad: '800' }]
+      }],
+      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, {
+        cliente: '', destino: 'Bodega Guayaquil', destinoFinal: 'Bodega Guayaquil', pedido: '', factura: '',
+        contenedor: '', naviera: '', tipoUnidad: 'camion', totalCajas: '600', totalPallets: '6',
+        productos: [{ producto: 'Pulpa de maracuyá 14 oz', codigo: 'PMR-014', cantidad: '600' }]
+      }]
     ];
-    const lista = ejemplos.map(([tipo, nombre, dias, fotos, cliente, destino]) => {
+    const lista = ejemplos.map(([tipo, nombre, dias, fotos, extra]) => {
       const fecha = new Date(Date.now() - dias * 864e5);
       const fin = new Date(fecha.getTime() + 3 * 36e5);
       const c = demoCarpeta(nombreCarpeta(nombre, fecha).nombre, sub[tipo]);
       demo.carpetas.get(c.id).fotos = Array.from({ length: fotos }, (_, i) => ({ id: c.id + '-' + i, name: `Foto_${pad3(i + 1)}.jpg` }));
       return {
         id: c.id, tipo, nombre, carpeta: c.name, webUrl: '#', fecha: fecha.toISOString(), estado: 'cerrado', cerrado: fin.toISOString(), fotos,
-        cliente, destino, lugarCarga: 'Planta Quevedo', pedido: '',
-        inspeccion: { exterior: si, interior: si, piso: si, refrigeracion: si, llantas: si, apta: si }
+        ...JSON.parse(JSON.stringify(comun)), ...extra
       };
     });
     demo.registro = JSON.stringify({ despachos: lista });
   }
   // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
-  const demoClave = () => 'demo.datos.v3.' + cuenta.username;
+  const demoClave = () => 'demo.datos.v4.' + cuenta.username;
   function demoGuardar() {
     cache.guardar(demoClave(), {
       n: demo.n, registro: demo.registro,
@@ -388,7 +445,8 @@
     const f = await graph(`/me/drive/items/${padre}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
     const d = {
       id: f.id, tipo, nombre: datos.nombre.trim().replace(/\s+/g, ' '), carpeta: f.name, webUrl: f.webUrl,
-      fecha: fecha.toISOString(), estado: 'proceso', cerrado: null, fotos: 0, inspeccion: {}
+      fecha: fecha.toISOString(), estado: 'proceso', cerrado: null, fotos: 0, inspeccion: {},
+      productos: [], totalCajas: '', totalPallets: '', observaciones: '', informeFotos: []
     };
     CAMPOS.forEach(([k]) => { d[k] = (datos[k] || '').trim(); });
     await cambiarRegistro(r => r.despachos.unshift(d));
@@ -531,12 +589,63 @@
       document.head.appendChild(s);
     });
   }
+  // Reduce una imagen para el informe (1280 px, JPEG) y devuelve sus bytes y medidas.
+  async function prepararFoto(blob) {
+    const img = await createImageBitmap(blob);
+    const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+    return { data: new Uint8Array(await b.arrayBuffer()), w: c.width, h: c.height };
+  }
+  async function cargarLogo() {
+    try {
+      const b = await (await fetch(CFG.logoInforme || 'icons/logo-hf.png')).blob();
+      const img = await createImageBitmap(b);
+      return { data: new Uint8Array(await b.arrayBuffer()), w: img.width, h: img.height };
+    } catch (_) { return null; }
+  }
+  // Fotos marcadas con estrella, en orden: se toman del celular si aún no se suben, o de OneDrive.
+  async function fotosParaInforme(d) {
+    const marcadas = (d.informeFotos || []).slice().sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+    const blobs = new Map();
+    for (const x of pendientesDe(d.id)) if (marcadas.includes(x.archivo)) blobs.set(x.archivo, x.blob);
+    let faltan = 0;
+    const restantes = marcadas.filter(n => !blobs.has(n));
+    if (restantes.length) {
+      try {
+        const r = await graph(`/me/drive/items/${d.id}/children?$select=id,name,file&$top=999`);
+        for (const n of restantes) {
+          const it = r.value.find(f => f.name === n);
+          try {
+            if (!it) throw new Error('no está');
+            if (DEMO) { const b = await idb.leer('demofoto.' + it.id); if (!b) throw new Error('sin archivo'); blobs.set(n, b); }
+            else {
+              const meta = await graph(`/me/drive/items/${it.id}`);
+              const resp = await fetch(meta['@microsoft.graph.downloadUrl']);
+              if (!resp.ok) throw new Error('descarga');
+              blobs.set(n, await resp.blob());
+            }
+          } catch (_) { faltan++; }
+        }
+      } catch (_) { faltan += restantes.length; }
+    }
+    const fotos = [];
+    for (const n of marcadas) {
+      if (!blobs.has(n)) continue;
+      try { fotos.push({ nombre: n, ...(await prepararFoto(blobs.get(n))) }); } catch (_) { faltan++; }
+    }
+    return { fotos, faltan };
+  }
   async function descargarInforme(d) {
     if (window.HUB_DEMO) { toast('En esta vista de prueba no se pueden descargar archivos. Usa la app publicada en GitHub.'); return; }
     st.generando = d.id; render();
     try {
       await cargarLibreriaWord();
-      const doc = window.HCInforme.crear(window.docx, d, CFG.informe || {});
+      const [logo, { fotos, faltan }] = await Promise.all([cargarLogo(), fotosParaInforme(d)]);
+      if (faltan) toast(`${faltan} ${faltan === 1 ? 'foto marcada no se pudo agregar' : 'fotos marcadas no se pudieron agregar'} (sin señal o ya no están). Puedes pegarlas en Word.`);
+      const doc = window.HCInforme.crear(window.docx, d, { ...(CFG.informe || {}), logo, fotos });
       const blob = await window.docx.Packer.toBlob(doc);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -544,7 +653,7 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
-      toast('Informe descargado. Ábrelo en Word para completarlo.');
+      setTimeout(() => toast('Informe descargado. Ábrelo en Word para revisarlo.'), faltan ? 3800 : 0);
     } catch (e) {
       console.error(e);
       toast(e instanceof SinSenal ? 'Sin señal: la primera vez se necesita internet para preparar el informe.' : 'No se pudo generar el informe. Avisa a soporte.');
@@ -600,7 +709,18 @@
   const saludo = () => { const h = new Date().getHours(); return h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches'; };
   const ordenados = tipo => registro.despachos.filter(d => !tipo || d.tipo === tipo).sort((a, b) => b.fecha.localeCompare(a.fecha));
   const inspHechos = d => INSPECCION.filter(([k]) => d.inspeccion && d.inspeccion[k] && d.inspeccion[k].v).length;
-  const datosHechos = d => CAMPOS.filter(([k]) => (d[k] || '').trim()).length;
+  // Avance de cada sección: [llenos, total], sin contar los campos opcionales.
+  function avance(d, s) {
+    if (s.id === 'insp') return [inspHechos(d), INSPECCION.length];
+    if (s.id === 'carga') {
+      const hay = (d.productos || []).some(p => (p.producto || '').trim());
+      return [(hay ? 1 : 0) + ['totalCajas', 'totalPallets'].filter(k => (d[k] || '').trim()).length, 3];
+    }
+    if (s.id === 'obs') return [(d.observaciones || '').trim() ? 1 : 0, 0];
+    const req = s.campos.filter(c => !(c[3] && c[3].opcional));
+    return [req.filter(([k]) => (d[k] || '').trim()).length, req.length];
+  }
+  const faltantes = d => SECCIONES.map(s => ({ s, a: avance(d, s) })).filter(x => x.a[1] && x.a[0] < x.a[1]);
   const delMes = d => { const f = new Date(d.fecha), h = new Date(); return f.getMonth() === h.getMonth() && f.getFullYear() === h.getFullYear(); };
 
   // ---------- Pantallas ----------
@@ -719,7 +839,7 @@
   function filtrados() {
     const q = st.q.trim().toLowerCase();
     return ordenados(st.tipo).filter(d => {
-      if (q && ![d.nombre, d.carpeta, d.cliente, d.destino, d.pedido].some(x => (x || '').toLowerCase().includes(q))) return false;
+      if (q && ![d.nombre, d.carpeta, d.cliente, d.destino, d.pedido, d.contenedor, d.factura].some(x => (x || '').toLowerCase().includes(q))) return false;
       const dia = isoDay(new Date(d.fecha));
       if (st.desde && dia < st.desde) return false;
       if (st.hasta && dia > st.hasta) return false;
@@ -757,17 +877,40 @@
     </main>`;
   }
 
-  // Listas para elegir: el catálogo de config.js (cuando se cargue) más lo ya escrito en registros anteriores.
-  function sugerencias() {
-    const catalogo = CFG.catalogos || {};
-    return CAMPOS.map(([k]) => {
-      const vals = [...new Set([...(catalogo[k] || []), ...registro.despachos.map(d => (d[k] || '').trim())].filter(Boolean))].slice(0, 200);
-      return `<datalist id="dl-${k}">${vals.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
-    }).join('');
+  // ---------- Listas desplegables ----------
+  // Cada campo con "lista" toma las opciones del catálogo de config.js (cuando se cargue la base de datos)
+  // y además sugiere lo ya escrito en registros anteriores, para poder elegir o escribir.
+  const norm = s => (s || '').toString().trim().toLowerCase();
+  const catalogo = () => CFG.catalogos || {};
+  function opcionesCampo([k, , , o]) {
+    const cat = (o && o.lista && catalogo()[o.lista]) || [];
+    const hist = registro.despachos.map(d => (d[k] || '').trim());
+    return [...new Set([...cat, ...hist].filter(Boolean))].slice(0, 300);
   }
-  function campo(k, etiqueta, ej, valor, prefijo) {
-    return `<div class="field"><label for="${prefijo}-${k}">${etiqueta}</label>
-      <input class="input" id="${prefijo}-${k}" data-campo="${k}" list="dl-${k}" autocomplete="off" placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
+  // Productos: solo los del cliente elegido en Datos generales (catálogo + los ya usados con ese cliente).
+  function productosDe(cliente) {
+    const c = norm(cliente);
+    const cat = (catalogo().productos || []).filter(p => !c || norm(p.cliente) === c);
+    const usados = registro.despachos.filter(d => !c || norm(d.cliente) === c).flatMap(d => d.productos || []);
+    const vistos = new Map();
+    [...cat, ...usados].forEach(p => { if (p && p.producto && !vistos.has(norm(p.producto))) vistos.set(norm(p.producto), p); });
+    return [...vistos.values()];
+  }
+  const codigoDe = (cliente, producto) => (productosDe(cliente).find(p => norm(p.producto) === norm(producto)) || {}).codigo || '';
+  function sugerencias(d) {
+    const listas = CAMPOS.filter(c => !(c[3] && c[3].opciones)).map(c =>
+      `<datalist id="dl-${c[0]}">${opcionesCampo(c).map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`);
+    if (d) listas.push(`<datalist id="dl-producto">${productosDe(d.cliente).map(p => `<option value="${esc(p.producto)}">${esc(p.codigo || '')}</option>`).join('')}</datalist>`);
+    return listas.join('');
+  }
+  function campo(def, valor, prefijo) {
+    const [k, etiqueta, ej, o = {}] = def;
+    if (o.opciones) {
+      return `<div class="field"><span class="lbl">${etiqueta}</span><div class="seg" role="group" aria-label="${esc(etiqueta)}">
+        ${o.opciones.map(([v, l]) => `<button data-act="opcion" data-k="${k}" data-v="${v}" aria-pressed="${valor === v}">${l}</button>`).join('')}</div></div>`;
+    }
+    return `<div class="field"><label for="${prefijo}-${k}">${etiqueta}${o.lista ? ' <span class="req">lista</span>' : ''}</label>
+      <input class="input" id="${prefijo}-${k}" data-campo="${k}" list="dl-${k}" autocomplete="off" ${o.num ? 'inputmode="numeric"' : ''} placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
   }
   function vistaRuta(final, quitados) {
     return `<span class="eyebrow">Se creará la carpeta</span>
@@ -786,8 +929,8 @@
         <p class="help">Será el nombre de la carpeta. Escríbelo como lo vas a buscar después.</p>
       </div>
       <div class="preview-path" id="ruta">${vistaRuta(nombre, quitados)}</div>
-      <div class="form-grid">${CAMPOS.map(([k, e, ej]) => campo(k, e, ej, n[k], 'nuevo')).join('')}</div>
-      <p class="help">Al crear se guarda la fecha y la hora de inicio; la hora de fin se guarda al cerrar. Estos datos se pueden completar o corregir después.</p>
+      <div class="form-grid">${NUEVO_CAMPOS.map(c => campo(c, n[c[0]], 'nuevo')).join('')}</div>
+      <p class="help">Al crear se guarda la fecha y la hora de inicio; la hora de fin se guarda al cerrar. El resto de datos (transporte, sellos, productos, personal) se llena dentro del ${t.uno}.</p>
       ${sugerencias()}
       <button class="btn primary big block" data-act="crear" id="crear" ${(n.nombre || '').trim().length >= 3 && !st.ocupado ? '' : 'disabled'}>${st.ocupado ? ic('spin') + 'Creando carpeta…' : ic('camera') + 'Crear y tomar fotos'}</button>
     </main>`;
@@ -818,39 +961,60 @@
       </div>` : ''}
       ${conError.length ? `<div class="note bad">${ic('alert')}<span>${conError.length} ${conError.length === 1 ? 'foto no se pudo subir' : 'fotos no se pudieron subir'}: ${esc(conError[0].error)} <button class="link" data-act="descartar">Descartarlas</button></span></div>` : ''}`;
   }
-  function seccionDatos(d) {
-    const hechos = datosHechos(d);
-    return `<details class="sec" data-sec="datos" ${st.abiertos.datos ? 'open' : ''}>
-      <summary><span>Datos del ${T(d).uno}</span><span class="prog ${hechos === CAMPOS.length ? 'ok' : ''}">${hechos} de ${CAMPOS.length}</span>${ic('chev')}</summary>
-      <div class="sec-in">
-        <div class="form-grid">${CAMPOS.map(([k, e, ej]) => campo(k, e, ej, d[k], 'det')).join('')}</div>
-        <div class="kv"><span>Hora de inicio</span><b>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}</b><span>Hora de fin</span><b>${d.cerrado ? `${fmtDate(d.cerrado)} · ${fmtTime(d.cerrado)}` : 'Se guarda al cerrar'}</b></div>
-        <p class="help">Los cambios se guardan solos. Transporte, carga y sellos se completan en el informe de Word.</p>
-        ${sugerencias()}
-      </div>
+
+  // ---------- Secciones del registro (mismo orden que el informe) ----------
+  const tituloSec = (s, d) => s.id === 'personal' ? `Personal a cargo del ${T(d).uno}` : s.titulo;
+  function plegable(d, s, i, contenido) {
+    const [hechos, total] = avance(d, s);
+    const badge = total ? `<span class="prog ${hechos >= total ? 'ok' : ''}">${hechos} de ${total}</span>` : `<span class="prog ${hechos ? 'ok' : 'opc'}">${hechos ? 'Escrito' : 'Opcional'}</span>`;
+    return `<details class="sec" id="sec-${s.id}" data-sec="${s.id}" ${st.abiertos[s.id] ? 'open' : ''}>
+      <summary><span><small class="sec-num">${i + 1}</small>${esc(tituloSec(s, d))}</span>${badge}${ic('chev')}</summary>
+      <div class="sec-in">${contenido}</div>
     </details>`;
+  }
+  function seccionCampos(d, s) {
+    return `<div class="form-grid">${s.campos.map(c => campo(c, d[c[0]], 'det')).join('')}</div>
+      ${s.id === 'generales' ? `<div class="kv"><span>Hora de inicio</span><b>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}</b><span>Hora de fin</span><b>${d.cerrado ? `${fmtDate(d.cerrado)} · ${fmtTime(d.cerrado)}` : 'Se guarda al cerrar'}</b></div>` : ''}`;
   }
   function seccionInspeccion(d) {
-    const hechos = inspHechos(d);
     const insp = d.inspeccion || {};
-    return `<details class="sec" data-sec="insp" ${st.abiertos.insp ? 'open' : ''}>
-      <summary><span>Inspección previa</span><span class="prog ${hechos === INSPECCION.length ? 'ok' : ''}">${hechos} de ${INSPECCION.length}</span>${ic('chev')}</summary>
-      <div class="sec-in insp">
-        ${INSPECCION.map(([k, nombre]) => {
-          const r = insp[k] || {};
-          return `<div class="insp-row">
-            <span class="insp-n">${esc(nombre)}</span>
-            <div class="seg" role="group" aria-label="${esc(nombre)}">
-              <button data-act="insp" data-k="${k}" data-v="si" aria-pressed="${r.v === 'si'}">Sí</button>
-              <button data-act="insp" data-k="${k}" data-v="no" aria-pressed="${r.v === 'no'}">No</button>
-            </div>
-            ${r.v === 'no' ? `<input class="input obs" data-obs="${k}" placeholder="¿Qué se encontró?" value="${esc(r.obs || '')}" maxlength="200" aria-label="Observación: ${esc(nombre)}">` : ''}
-          </div>`;
-        }).join('')}
-        <p class="help">Se marca antes de cargar. Si algo está mal, escribe la observación; sale en el informe.</p>
-      </div>
-    </details>`;
+    return `<div class="insp">${INSPECCION.map(([k, nombre]) => {
+      const r = insp[k] || {};
+      return `<div class="insp-row">
+        <span class="insp-n">${esc(nombre)}</span>
+        <div class="seg" role="group" aria-label="${esc(nombre)}">
+          <button data-act="insp" data-k="${k}" data-v="si" aria-pressed="${r.v === 'si'}">Sí</button>
+          <button data-act="insp" data-k="${k}" data-v="no" aria-pressed="${r.v === 'no'}">No</button>
+        </div>
+        ${r.v === 'no' ? `<input class="input obs" data-obs="${k}" placeholder="¿Qué se encontró?" value="${esc(r.obs || '')}" maxlength="200" aria-label="Observación: ${esc(nombre)}">` : ''}
+      </div>`;
+    }).join('')}</div>
+    <p class="help">Se marca antes de cargar. Si algo está mal, escribe la observación; sale en el informe.</p>`;
   }
+  function seccionCarga(d) {
+    const prods = d.productos && d.productos.length ? d.productos : [{}];
+    return `${d.cliente ? `<p class="help">Productos de <b>${esc(d.cliente)}</b>. Al elegir uno, el código se llena solo.</p>`
+        : `<p class="help">Elige primero el <b>cliente</b> en Datos generales para ver solo sus productos.</p>`}
+      <div class="prods">
+        ${prods.map((p, i) => `<div class="prod">
+          <span class="prod-n">${i + 1}</span>
+          <input class="input p-prod" data-prod="producto" data-i="${i}" list="dl-producto" autocomplete="off" placeholder="Producto" value="${esc(p.producto || '')}" aria-label="Producto ${i + 1}">
+          <input class="input p-cod" data-prod="codigo" data-i="${i}" autocomplete="off" placeholder="Código" value="${esc(p.codigo || '')}" aria-label="Código ${i + 1}">
+          <input class="input p-can" data-prod="cantidad" data-i="${i}" autocomplete="off" inputmode="decimal" placeholder="Cantidad" value="${esc(p.cantidad || '')}" aria-label="Cantidad ${i + 1}">
+          <button class="icon-btn p-x" data-act="quitarprod" data-i="${i}" aria-label="Quitar producto ${i + 1}">${ic('x')}</button>
+        </div>`).join('')}
+      </div>
+      <button class="btn" data-act="agregarprod">${ic('plus')}Agregar producto</button>
+      <div class="form-grid">${campo(['totalCajas', 'Total cajas', 'Ej. 2000', { num: true }], d.totalCajas, 'det')}${campo(['totalPallets', 'Total pallets', 'Ej. 20', { num: true }], d.totalPallets, 'det')}</div>`;
+  }
+  function seccionObs(d) {
+    return `<textarea class="input area-obs" id="det-observaciones" data-campo="observaciones" rows="4" maxlength="1500" placeholder="Novedades del ${T(d).uno}, si las hay" aria-label="Observaciones">${esc(d.observaciones || '')}</textarea>`;
+  }
+  function secciones(d) {
+    return SECCIONES.map((s, i) => plegable(d, s, i,
+      s.id === 'insp' ? seccionInspeccion(d) : s.id === 'carga' ? seccionCarga(d) : s.id === 'obs' ? seccionObs(d) : seccionCampos(d, s))).join('');
+  }
+
   function vDespacho() {
     const d = buscar(vista.id);
     if (!d) return vModulo();
@@ -858,25 +1022,28 @@
     const abierto = d.estado === 'proceso';
     const pend = pendientesDe(d.id);
     const borradores = pend.filter(x => !x.listo).length;
+    const marcadas = d.informeFotos || [];
     const fotoNum = name => { const m = /(\d+)/.exec(name); return m ? m[1] : ''; };
     // Botón X para eliminar (solo con el registro abierto); al tocarlo pide confirmar sobre la misma foto.
     const quitar = (id, tipo, nombre) => {
       if (!abierto || id === subiendoId) return '';
       if (st.borrar === id) return `<div class="confirm"><span>¿Eliminar foto ${esc(fotoNum(nombre))}?</span>
-        <button class="si" data-act="borrarfoto" data-id="${esc(id)}" data-tipo="${tipo}" ${st.ocupado ? 'disabled' : ''}>Eliminar</button>
+        <button class="si" data-act="borrarfoto" data-id="${esc(id)}" data-tipo="${tipo}" data-n="${esc(nombre)}" ${st.ocupado ? 'disabled' : ''}>Eliminar</button>
         <button class="no" data-act="noborrar">Cancelar</button></div>`;
       return `<button class="del" data-act="preborrar" data-id="${esc(id)}" aria-label="Eliminar foto ${esc(fotoNum(nombre))}">${ic('x')}</button>`;
     };
+    // Estrella: la foto va al informe.
+    const estrella = nombre => `<button class="star" data-act="estrella" data-n="${esc(nombre)}" aria-pressed="${marcadas.includes(nombre)}" aria-label="Usar foto ${esc(fotoNum(nombre))} en el informe">${ic('star')}</button>`;
     const tilesNube = vista.nube.slice().reverse().map(f => {
       const src = recientes.get(f.name) || f.thumb;
-      return `<div class="tile">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${quitar(f.id, 'nube', f.name)}</div>`;
+      return `<div class="tile ${marcadas.includes(f.name) ? 'marcada' : ''}">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${estrella(f.name)}${quitar(f.id, 'nube', f.name)}</div>`;
     });
     const tilesCola = pend.slice().reverse().map(x => {
       const badge = x.error ? `<span class="st err" title="No se pudo subir">${ic('alert')}</span>`
         : !x.listo ? `<span class="st local" title="Sin subir">Sin subir</span>`
         : x.id === subiendoId ? `<span class="st up" title="Subiendo">${ic('spin')}</span>`
         : `<span class="st wait" title="Esperando">${ic('clock')}</span>`;
-      return `<div class="tile ${x.listo ? 'pend' : 'draft'}"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${quitar(x.id, 'cola', x.archivo)}</div>`;
+      return `<div class="tile ${x.listo ? 'pend' : 'draft'} ${marcadas.includes(x.archivo) ? 'marcada' : ''}"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${estrella(x.archivo)}${quitar(x.id, 'cola', x.archivo)}</div>`;
     });
     const tiles = tilesCola.concat(tilesNube);
     return `<main class="wrap">
@@ -896,14 +1063,15 @@
           <button class="btn" data-act="reabrir" ${st.ocupado ? 'disabled' : ''}>${ic('redo')}Reabrir para agregar fotos</button></div>`}
       ${cajaSubida(d)}
       <section class="list">
-        <div class="sec-h"><h2>Fotos</h2><span class="count">${tiles.length}</span></div>
+        <div class="sec-h"><h2>Fotos</h2><span class="count">${tiles.length} · <span class="cnt-star">${ic('star')} ${marcadas.length} para el informe</span></span></div>
+        ${tiles.length ? `<p class="help">Toca la estrella en las fotos que van al informe.</p>` : ''}
         ${vista.error ? `<div class="note bad">${ic('alert')}<span>${esc(vista.error)} <button class="link" data-act="recargarvista">Reintentar</button></span></div>` : ''}
         ${tiles.length ? `<div class="grid">${tiles.join('')}</div>`
           : vista.cargando ? `<p class="loading">${ic('spin')}Cargando fotos…</p>`
           : `<div class="empty">Toca <b>Tomar foto</b> para empezar. Las fotos quedan en el celular hasta que tocas <b>Subir</b>.</div>`}
       </section>
-      ${seccionDatos(d)}
-      ${seccionInspeccion(d)}
+      <section class="list"><span class="eyebrow">Datos del informe · se guardan solos</span>${secciones(d)}</section>
+      ${sugerencias(d)}
       <div class="row">
         <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
         <a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>
@@ -911,6 +1079,25 @@
       ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
         ${borradores ? `<p class="help">Para cerrar, primero sube las ${borradores} ${borradores === 1 ? 'foto' : 'fotos'} que están en el celular o elimínalas.</p>` : ''}` : ''}
     </main>`;
+  }
+
+  // Aviso al cerrar si falta algo: solo informa; se puede cerrar igual.
+  function vAvisoCierre() {
+    const d = st.aviso && buscar(st.aviso);
+    if (!d) return '';
+    const falta = faltantes(d);
+    const sinFotos = !(d.informeFotos || []).length;
+    return `<div class="sheet-bg" data-act="cerraraviso"><div class="sheet" data-stop>
+      <span class="eyebrow">Antes de cerrar</span>
+      <h2 style="font-size:20px">Hay datos sin llenar</h2>
+      <ul class="faltan">
+        ${falta.map(({ s, a }) => `<li><button class="link" data-act="completar" data-s="${s.id}">${esc(tituloSec(s, d))}</button><span>faltan ${a[1] - a[0]}</span></li>`).join('')}
+        ${sinFotos ? `<li><span>Ninguna foto marcada para el informe</span></li>` : ''}
+      </ul>
+      <p class="help">Puedes cerrar igual y completarlo después, o volver a llenarlo ahora.</p>
+      <button class="btn block primary" data-act="cerrar" data-forzar="1">${ic('check')}Cerrar de todas formas</button>
+      <button class="btn block" data-act="cerraraviso">Volver y completar</button>
+    </div></div>`;
   }
 
   function vRevision() {
@@ -957,7 +1144,7 @@
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
     const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
-    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu() + vAvisoCierre();
   }
 
   // ---------- Vista de un registro ----------
@@ -1082,6 +1269,43 @@
         if (v === 'no' && actual !== 'no') setTimeout(() => document.querySelector(`[data-obs="${k}"]`)?.focus(), 30);
         break;
       }
+      case 'opcion': {
+        const k = b.dataset.k, v = b.dataset.v;
+        guardarDetalles(d.id, { [k]: d[k] === v ? '' : v });
+        render();
+        break;
+      }
+      case 'estrella': {
+        const n = b.dataset.n;
+        const lista = (d.informeFotos || []).slice();
+        const i = lista.indexOf(n);
+        if (i >= 0) lista.splice(i, 1); else lista.push(n);
+        guardarDetalles(d.id, { informeFotos: lista });
+        render();
+        break;
+      }
+      case 'agregarprod': {
+        const prods = (d.productos && d.productos.length ? d.productos : [{}]).map(p => ({ ...p }));
+        prods.push({ producto: '', codigo: '', cantidad: '' });
+        guardarDetalles(d.id, { productos: prods });
+        render();
+        setTimeout(() => document.querySelector(`[data-prod="producto"][data-i="${prods.length - 1}"]`)?.focus(), 30);
+        break;
+      }
+      case 'quitarprod': {
+        const prods = (d.productos || []).map(p => ({ ...p }));
+        prods.splice(+b.dataset.i, 1);
+        guardarDetalles(d.id, { productos: prods });
+        render();
+        break;
+      }
+      case 'cerraraviso': if (e.target === b || b.tagName === 'BUTTON') { st.aviso = null; render(); } break;
+      case 'completar': {
+        const s = b.dataset.s;
+        st.aviso = null; st.abiertos[s] = true; render();
+        setTimeout(() => document.getElementById('sec-' + s)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+        break;
+      }
       case 'camara': cam.click(); break;
       case 'galeria': gal.click(); break;
       case 'repetir': soltarRevision(); render(); cam.click(); break;
@@ -1118,6 +1342,7 @@
         const id = b.dataset.id;
         if (b.dataset.tipo === 'cola') {
           if (id === subiendoId) { toast('Esa foto se está subiendo; espera un momento.'); break; }
+          if ((d.informeFotos || []).includes(b.dataset.n)) guardarDetalles(d.id, { informeFotos: d.informeFotos.filter(x => x !== b.dataset.n) });
           await idb.quitar(id);
           urlsCola.delete(id);
           await refrescarCola();
@@ -1131,6 +1356,7 @@
           vista.nube = vista.nube.filter(f => f.id !== id);
           const n = vista.nube.length;
           d.fotos = n;
+          if ((d.informeFotos || []).includes(b.dataset.n)) guardarDetalles(d.id, { informeFotos: d.informeFotos.filter(x => x !== b.dataset.n) });
           cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); if (x) x.fotos = n; }).catch(() => {});
           toast(DEMO ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
         } catch (err) {
@@ -1142,6 +1368,9 @@
       }
       case 'cerrar': {
         if (porSubir(d.id).length) { toast('Primero sube las fotos que están en el celular.'); break; }
+        // Si falta llenar algo, solo se avisa; con "Cerrar de todas formas" se cierra igual.
+        if (!b.dataset.forzar && (faltantes(d).length || !(d.informeFotos || []).length)) { st.aviso = d.id; render(); break; }
+        st.aviso = null;
         st.ocupado = true; render();
         try {
           const n = await contarFotos(d.id);
@@ -1190,7 +1419,26 @@
     if (!d || st.view !== 'despacho') return;
     if (t.id && t.id.startsWith('det-')) {
       const v = t.value.trim();
-      if ((d[t.dataset.campo] || '') !== v) { guardarDetalles(d.id, { [t.dataset.campo]: v }); toast('Guardado'); }
+      if ((d[t.dataset.campo] || '') !== v) {
+        guardarDetalles(d.id, { [t.dataset.campo]: v });
+        toast('Guardado');
+        if (t.dataset.campo === 'cliente') render(); // cambia la lista de productos
+      }
+    } else if (t.dataset.prod) {
+      // Fila de producto: al elegir el producto se llena solo su código.
+      const i = +t.dataset.i;
+      const prods = (d.productos && d.productos.length ? d.productos : [{}]).map(p => ({ ...p }));
+      prods[i] = { ...(prods[i] || {}), [t.dataset.prod]: t.value.trim() };
+      if (t.dataset.prod === 'producto') {
+        const cod = codigoDe(d.cliente, t.value);
+        if (cod) {
+          prods[i].codigo = cod;
+          const c = document.querySelector(`[data-prod="codigo"][data-i="${i}"]`);
+          if (c) c.value = cod;
+        }
+      }
+      guardarDetalles(d.id, { productos: prods });
+      toast('Guardado');
     } else if (t.dataset.obs) {
       guardarDetalles(d.id, { inspeccion: { [t.dataset.obs]: { obs: t.value.trim() } } });
       toast('Guardado');
