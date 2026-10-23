@@ -23,7 +23,6 @@
 
   const pad = n => String(n).padStart(2, '0');
   const fecha = v => { if (!v) return ''; const d = new Date(v); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
-  const hora = v => { if (!v) return ''; const d = new Date(v); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   // Ajusta una imagen dentro de un recuadro (en píxeles) sin deformarla.
   const encajar = (w, h, maxW, maxH) => { const k = Math.min(maxW / w, maxH / h); return { width: Math.round(w * k), height: Math.round(h * k) }; };
 
@@ -72,7 +71,7 @@
     // ---- encabezado (con logo) y pie ----
     const H = [2200, 5368, 2800];
     const logo = op.logo && op.logo.data
-      ? new ImageRun({ type: 'png', data: op.logo.data, transformation: encajar(op.logo.w, op.logo.h, 90, 72) })
+      ? new ImageRun({ type: 'png', data: op.logo.data, transformation: encajar(op.logo.w, op.logo.h, 120, 82) })
       : texto('HEALTHY FOOD', { bold: true, color: '7E9A3F', size: 24 });
     const encabezado = new Header({
       children: [
@@ -110,8 +109,9 @@
       seccion('DATOS GENERALES'),
       pares([
         ['Operación', [casilla(!esTraslado), texto(' Exportación     '), casilla(esTraslado), texto(' Traslado')], 'Fecha', fecha(reg.fecha)],
-        ['Cliente', v('cliente'), 'Hora de inicio', hora(reg.fecha)],
-        ['Destino', v('destino'), 'Hora de fin', hora(reg.cerrado)],
+        // Las horas las escribe Ventas a mano en el Word.
+        ['Cliente', v('cliente'), 'Hora de inicio', ''],
+        ['Destino', v('destino'), 'Hora de fin', ''],
         ['Lugar de carga', v('lugarCarga'), 'Destino final', v('destinoFinal')],
         ['Pedido / OC', v('pedido'), 'Factura / DAE', v('factura')],
         ['Responsable', v('responsable'), 'C.I.', v('ci')],

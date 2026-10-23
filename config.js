@@ -26,10 +26,8 @@ window.HUB_CONFIG = {
   // Carpeta del OneDrive donde va todo: adentro quedan "Despachos" y "Traslados", con una carpeta por registro.
   carpetaRaiz: 'Hub Comex',
 
-  // Listas para elegir al llenar los datos (además se puede escribir). Aquí se cargará la base de datos;
-  // mientras tanto, la app sugiere lo ya escrito en registros anteriores.
-  // Productos: cada uno con su cliente y código. Al elegir el cliente, solo aparecen sus productos,
-  // y al elegir el producto se llena solo el código.
+  // Listas desplegables: se cargan desde catalogos.js (generado del Excel "LISTA DESPLEGABLE APP COMEX.xlsx"
+  // con herramientas/excel-a-catalogos.py). Esto de abajo solo se usa si catalogos.js no existe.
   catalogos: {
     clientes: [],
     destinos: [],

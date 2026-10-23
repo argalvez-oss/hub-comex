@@ -238,7 +238,7 @@
     const sub = { despacho: demoCarpeta('Despachos', raiz).id, traslado: demoCarpeta('Traslados', raiz).id };
     const si = { v: 'si' };
     const comun = {
-      lugarCarga: 'Planta Quevedo', responsable: 'Ana Pérez', ci: '1712345678', transportista: 'Transportes del Litoral',
+      lugarCarga: 'ITULCACHI, PIFO, QUITO', responsable: 'Ana Pérez', ci: '1712345678', transportista: 'Transportes del Litoral',
       conductor: 'Luis Mora', cedula: '0912345678', placa: 'GBA-1234', tipoUnidad: 'reefer', capacidad: "40'",
       tInicial: '-18', tFinal: '-19', setPoint: '-20', termografo: 'TG-8841',
       selloNaviera: 'ML-998877', selloBotella: 'HF-0455', selloCable: 'C-2201', sticker: 'ST-12',
@@ -247,14 +247,14 @@
     };
     const ejemplos = [
       ['despacho', 'Pulpa mango Goya contenedor C6', 3, 38, {
-        cliente: 'Goya Foods Inc.', destino: 'Jersey City, EE. UU.', destinoFinal: 'Secaucus, NJ', pedido: '267-261523', factura: '001-001-000123',
-        contenedor: 'MSKU 123456-7', naviera: 'Maersk', totalCajas: '2000', totalPallets: '20',
-        productos: [{ producto: 'Pulpa de mango 14 oz', codigo: 'PM-014', cantidad: '1200' }, { producto: 'Pulpa de maracuyá 14 oz', codigo: 'PMR-014', cantidad: '800' }]
+        cliente: 'GOYA USA', destino: 'NEW YORK, NY, USA', destinoFinal: 'NEWARK, NJ, USA', pedido: '267-261523', factura: '001-001-000123',
+        contenedor: 'MSKU 123456-7', naviera: 'Hapag Lloyd', totalCajas: '2000', totalPallets: '20',
+        productos: [{ producto: 'MANGO PULP 12X14 OZ', codigo: 'PTEXP001', cantidad: '1200' }, { producto: 'PASSION FRUIT PULP 12X14 OZ', codigo: 'PTEXP007', cantidad: '800' }]
       }],
-      ['traslado', 'Pulpa maracuyá a bodega Guayaquil', 8, 12, {
-        cliente: '', destino: 'Bodega Guayaquil', destinoFinal: 'Bodega Guayaquil', pedido: '', factura: '',
+      ['traslado', 'Pulpa maracuyá a bodega Durán', 8, 12, {
+        cliente: 'GOYA USA', destino: 'ECLA, DURÁN', destinoFinal: 'ECLA, DURÁN', pedido: '', factura: '',
         contenedor: '', naviera: '', tipoUnidad: 'camion', totalCajas: '600', totalPallets: '6',
-        productos: [{ producto: 'Pulpa de maracuyá 14 oz', codigo: 'PMR-014', cantidad: '600' }]
+        productos: [{ producto: 'PASSION FRUIT PULP 12X14 OZ', codigo: 'PTEXP007', cantidad: '600' }]
       }]
     ];
     const lista = ejemplos.map(([tipo, nombre, dias, fotos, extra]) => {
@@ -270,7 +270,7 @@
     demo.registro = JSON.stringify({ despachos: lista });
   }
   // Lo simulado se guarda en este dispositivo: datos en localStorage, fotos en IndexedDB.
-  const demoClave = () => 'demo.datos.v4.' + cuenta.username;
+  const demoClave = () => 'demo.datos.v5.' + cuenta.username;
   function demoGuardar() {
     cache.guardar(demoClave(), {
       n: demo.n, registro: demo.registro,
@@ -669,7 +669,8 @@
   const gal = document.getElementById('gal');
   const st = {
     view: 'boot', tipo: 'despacho', prev: 'modulo', rol: null, menu: false, revision: null, ocupado: false,
-    nuevo: {}, q: '', desde: '', hasta: '', estado: 'todos', error: null, abiertos: {}, borrar: null, generando: null
+    nuevo: {}, q: '', desde: '', hasta: '', estado: 'todos', error: null, abiertos: {}, borrar: null, generando: null,
+    libre: {} // campos de lista donde se eligió "Otro (escribir)"
   };
   let vista = { id: null, nube: [], cargando: false, error: null };
   const EN_AREA = ['modulo', 'nuevo', 'registros', 'despacho'];
@@ -695,14 +696,14 @@
   function refrescar() {
     if (st.revision || !['despacho', 'areas', 'modulo'].includes(st.view)) return;
     const a = document.activeElement;
-    if (a && app.contains(a) && /INPUT|TEXTAREA/.test(a.tagName)) { repintar = true; return; }
+    if (a && app.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) { repintar = true; return; }
     render();
   }
   document.addEventListener('focusout', () => {
     if (!repintar) return;
     setTimeout(() => {
       const a = document.activeElement;
-      if (a && app.contains(a) && /INPUT|TEXTAREA/.test(a.tagName)) return;
+      if (a && app.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
       repintar = false; refrescar();
     }, 250);
   });
@@ -878,39 +879,50 @@
   }
 
   // ---------- Listas desplegables ----------
-  // Cada campo con "lista" toma las opciones del catálogo de config.js (cuando se cargue la base de datos)
-  // y además sugiere lo ya escrito en registros anteriores, para poder elegir o escribir.
+  // Las opciones salen de catalogos.js (generado desde el Excel "LISTA DESPLEGABLE APP COMEX.xlsx").
+  // Los campos con lista se eligen de un desplegable; "Otro (escribir)" permite poner un valor que no esté.
+  // Los productos son estrictos: solo los del cliente elegido, y al elegir uno se llena su código.
   const norm = s => (s || '').toString().trim().toLowerCase();
-  const catalogo = () => CFG.catalogos || {};
-  function opcionesCampo([k, , , o]) {
+  const catalogo = () => window.HUB_CATALOGOS || CFG.catalogos || {};
+  const OTRO = '__otro';
+  function opcionesLista([k, , , o]) {
     const cat = (o && o.lista && catalogo()[o.lista]) || [];
-    const hist = registro.despachos.map(d => (d[k] || '').trim());
-    return [...new Set([...cat, ...hist].filter(Boolean))].slice(0, 300);
+    const hist = registro.despachos.map(d => (d[k] || '').trim()).filter(v => v && !cat.some(c => norm(c) === norm(v)));
+    return [...new Set([...cat, ...hist.sort()])];
   }
-  // Productos: solo los del cliente elegido en Datos generales (catálogo + los ya usados con ese cliente).
-  function productosDe(cliente) {
-    const c = norm(cliente);
-    const cat = (catalogo().productos || []).filter(p => !c || norm(p.cliente) === c);
-    const usados = registro.despachos.filter(d => !c || norm(d.cliente) === c).flatMap(d => d.productos || []);
-    const vistos = new Map();
-    [...cat, ...usados].forEach(p => { if (p && p.producto && !vistos.has(norm(p.producto))) vistos.set(norm(p.producto), p); });
-    return [...vistos.values()];
+  // Productos del catálogo para un cliente (lista estricta).
+  const productosCatalogo = cliente => (catalogo().productos || []).filter(p => norm(p.cliente) === norm(cliente));
+  function codigoDe(cliente, producto) {
+    const enCat = productosCatalogo(cliente).find(p => norm(p.producto) === norm(producto));
+    if (enCat) return enCat.codigo || '';
+    const usado = registro.despachos.filter(d => norm(d.cliente) === norm(cliente)).flatMap(d => d.productos || []).find(p => norm(p.producto) === norm(producto) && p.codigo);
+    return usado ? usado.codigo : '';
   }
-  const codigoDe = (cliente, producto) => (productosDe(cliente).find(p => norm(p.producto) === norm(producto)) || {}).codigo || '';
-  function sugerencias(d) {
-    const listas = CAMPOS.filter(c => !(c[3] && c[3].opciones)).map(c =>
-      `<datalist id="dl-${c[0]}">${opcionesCampo(c).map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`);
-    if (d) listas.push(`<datalist id="dl-producto">${productosDe(d.cliente).map(p => `<option value="${esc(p.producto)}">${esc(p.codigo || '')}</option>`).join('')}</datalist>`);
-    return listas.join('');
+  // Sugerencias para los campos de texto libre (lo ya escrito en registros anteriores).
+  function sugerencias() {
+    return CAMPOS.filter(c => !(c[3] && (c[3].opciones || c[3].lista))).map(([k]) => {
+      const vals = [...new Set(registro.despachos.map(d => (d[k] || '').trim()).filter(Boolean))].slice(0, 100);
+      return vals.length ? `<datalist id="dl-${k}">${vals.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>` : '';
+    }).join('');
   }
   function campo(def, valor, prefijo) {
     const [k, etiqueta, ej, o = {}] = def;
+    const id = `${prefijo}-${k}`;
     if (o.opciones) {
       return `<div class="field"><span class="lbl">${etiqueta}</span><div class="seg" role="group" aria-label="${esc(etiqueta)}">
         ${o.opciones.map(([v, l]) => `<button data-act="opcion" data-k="${k}" data-v="${v}" aria-pressed="${valor === v}">${l}</button>`).join('')}</div></div>`;
     }
-    return `<div class="field"><label for="${prefijo}-${k}">${etiqueta}${o.lista ? ' <span class="req">lista</span>' : ''}</label>
-      <input class="input" id="${prefijo}-${k}" data-campo="${k}" list="dl-${k}" autocomplete="off" ${o.num ? 'inputmode="numeric"' : ''} placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
+    const opciones = o.lista ? opcionesLista(def) : [];
+    if (o.lista && opciones.length && !st.libre[id]) {
+      return `<div class="field"><label for="${id}">${etiqueta}</label>
+        <select class="input" id="${id}" data-campo="${k}">
+          <option value="">Elegir…</option>
+          ${opciones.map(v => `<option value="${esc(v)}" ${norm(v) === norm(valor) ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+          <option value="${OTRO}">Otro (escribir)</option>
+        </select></div>`;
+    }
+    return `<div class="field"><label for="${id}">${etiqueta}${o.lista && opciones.length ? ` <button class="link mini" data-act="alista" data-id="${id}">Elegir de la lista</button>` : ''}</label>
+      <input class="input" id="${id}" data-campo="${k}" ${o.lista ? '' : `list="dl-${k}"`} autocomplete="off" ${o.num ? 'inputmode="numeric"' : ''} placeholder="${esc(ej)}" value="${esc(valor || '')}" maxlength="120"></div>`;
   }
   function vistaRuta(final, quitados) {
     return `<span class="eyebrow">Se creará la carpeta</span>
@@ -930,7 +942,7 @@
       </div>
       <div class="preview-path" id="ruta">${vistaRuta(nombre, quitados)}</div>
       <div class="form-grid">${NUEVO_CAMPOS.map(c => campo(c, n[c[0]], 'nuevo')).join('')}</div>
-      <p class="help">Al crear se guarda la fecha y la hora de inicio; la hora de fin se guarda al cerrar. El resto de datos (transporte, sellos, productos, personal) se llena dentro del ${t.uno}.</p>
+      <p class="help">La fecha se guarda sola al crear. El resto de datos (transporte, sellos, productos, personal) se llena dentro del ${t.uno}.</p>
       ${sugerencias()}
       <button class="btn primary big block" data-act="crear" id="crear" ${(n.nombre || '').trim().length >= 3 && !st.ocupado ? '' : 'disabled'}>${st.ocupado ? ic('spin') + 'Creando carpeta…' : ic('camera') + 'Crear y tomar fotos'}</button>
     </main>`;
@@ -974,7 +986,7 @@
   }
   function seccionCampos(d, s) {
     return `<div class="form-grid">${s.campos.map(c => campo(c, d[c[0]], 'det')).join('')}</div>
-      ${s.id === 'generales' ? `<div class="kv"><span>Hora de inicio</span><b>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}</b><span>Hora de fin</span><b>${d.cerrado ? `${fmtDate(d.cerrado)} · ${fmtTime(d.cerrado)}` : 'Se guarda al cerrar'}</b></div>` : ''}`;
+      ${s.id === 'generales' ? `<div class="kv"><span>Fecha</span><b>${fmtDate(d.fecha)}</b></div>` : ''}`;
   }
   function seccionInspeccion(d) {
     const insp = d.inspeccion || {};
@@ -993,12 +1005,23 @@
   }
   function seccionCarga(d) {
     const prods = d.productos && d.productos.length ? d.productos : [{}];
-    return `${d.cliente ? `<p class="help">Productos de <b>${esc(d.cliente)}</b>. Al elegir uno, el código se llena solo.</p>`
+    const lista = productosCatalogo(d.cliente);
+    // Con un cliente del catálogo: solo se puede elegir entre sus productos. Sin cliente del catálogo: se escribe.
+    const selProducto = (p, i) => {
+      const fuera = p.producto && !lista.some(x => norm(x.producto) === norm(p.producto));
+      return `<select class="input p-prod" data-prod="producto" data-i="${i}" aria-label="Producto ${i + 1}">
+        <option value="">Elegir producto…</option>
+        ${fuera ? `<option value="${esc(p.producto)}" selected>${esc(p.producto)} (no es de este cliente)</option>` : ''}
+        ${lista.map(x => `<option value="${esc(x.producto)}" ${norm(x.producto) === norm(p.producto) ? 'selected' : ''}>${esc(x.producto)}</option>`).join('')}
+      </select>`;
+    };
+    return `${lista.length ? `<p class="help">Productos de <b>${esc(d.cliente)}</b>. Al elegir uno, el código se llena solo.</p>`
+        : d.cliente ? `<p class="help"><b>${esc(d.cliente)}</b> no tiene productos en la lista; escríbelos.</p>`
         : `<p class="help">Elige primero el <b>cliente</b> en Datos generales para ver solo sus productos.</p>`}
       <div class="prods">
         ${prods.map((p, i) => `<div class="prod">
           <span class="prod-n">${i + 1}</span>
-          <input class="input p-prod" data-prod="producto" data-i="${i}" list="dl-producto" autocomplete="off" placeholder="Producto" value="${esc(p.producto || '')}" aria-label="Producto ${i + 1}">
+          ${lista.length ? selProducto(p, i) : `<input class="input p-prod" data-prod="producto" data-i="${i}" autocomplete="off" placeholder="Producto" value="${esc(p.producto || '')}" aria-label="Producto ${i + 1}">`}
           <input class="input p-cod" data-prod="codigo" data-i="${i}" autocomplete="off" placeholder="Código" value="${esc(p.codigo || '')}" aria-label="Código ${i + 1}">
           <input class="input p-can" data-prod="cantidad" data-i="${i}" autocomplete="off" inputmode="decimal" placeholder="Cantidad" value="${esc(p.cantidad || '')}" aria-label="Cantidad ${i + 1}">
           <button class="icon-btn p-x" data-act="quitarprod" data-i="${i}" aria-label="Quitar producto ${i + 1}">${ic('x')}</button>
@@ -1393,13 +1416,22 @@
         st.ocupado = false; render();
         break;
       }
+      case 'alista': e.preventDefault(); delete st.libre[b.dataset.id]; render(); break;
       case 'estado': st.estado = b.dataset.e; render(); break;
       case 'limpiar': Object.assign(st, { q: '', desde: '', hasta: '', estado: 'todos' }); render(); break;
     }
   });
 
+  // "Otro (escribir)" en una lista: se cambia por un campo de texto para escribir el valor.
+  function escribirOtro(id) {
+    st.libre[id] = true;
+    render();
+    setTimeout(() => document.getElementById(id)?.focus(), 30);
+  }
+
   document.addEventListener('input', e => {
     const t = e.target;
+    if (t.value === OTRO && t.id) { escribirOtro(t.id); if (t.id.startsWith('nuevo-')) st.nuevo[t.dataset.campo] = ''; return; }
     if (t.id && t.id.startsWith('nuevo-')) {
       st.nuevo[t.dataset.campo] = t.value;
       if (t.dataset.campo === 'nombre') {
@@ -1417,6 +1449,7 @@
     const t = e.target;
     const d = buscar(vista.id);
     if (!d || st.view !== 'despacho') return;
+    if (t.value === OTRO) return; // lo atiende el evento "input": cambia la lista por un campo para escribir
     if (t.id && t.id.startsWith('det-')) {
       const v = t.value.trim();
       if ((d[t.dataset.campo] || '') !== v) {
