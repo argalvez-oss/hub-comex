@@ -579,13 +579,6 @@
     const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
     return { data: new Uint8Array(await b.arrayBuffer()), w: c.width, h: c.height };
   }
-  async function cargarLogo() {
-    try {
-      const b = await (await fetch(CFG.logoInforme || 'icons/logo-hf.png')).blob();
-      const img = await createImageBitmap(b);
-      return { data: new Uint8Array(await b.arrayBuffer()), w: img.width, h: img.height };
-    } catch (_) { return null; }
-  }
   // Fotos marcadas con estrella, en orden: se toman del celular si aún no se suben, o de OneDrive.
   async function fotosParaInforme(d) {
     const marcadas = (d.informeFotos || []).slice().sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
@@ -623,9 +616,9 @@
     st.generando = d.id; render();
     try {
       await cargarLibreriaWord();
-      const [logo, { fotos, faltan }] = await Promise.all([cargarLogo(), fotosParaInforme(d)]);
+      const { fotos, faltan } = await fotosParaInforme(d); // el logo ya viene dentro de informe.js
       if (faltan) toast(`${faltan} ${faltan === 1 ? 'foto marcada no se pudo agregar' : 'fotos marcadas no se pudieron agregar'} (sin señal o ya no están). Puedes pegarlas en Word.`);
-      const doc = window.HCInforme.crear(window.docx, d, { ...(CFG.informe || {}), logo, fotos });
+      const doc = window.HCInforme.crear(window.docx, d, { ...(CFG.informe || {}), fotos });
       const blob = await window.docx.Packer.toBlob(doc);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
