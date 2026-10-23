@@ -1,6 +1,14 @@
 # Hub Comex
 
-App del área de Ventas para registrar **despachos y traslados**: fotos directo a OneDrive, datos básicos, inspección previa e informe en Word.
+App del área de Ventas para registrar **despachos y traslados**: fotos, datos del informe, inspección previa e informe en Word.
+
+## Dónde se guardan los datos (hoy: Firebase, provisional)
+- `config.js` → `modo: 'firebase'`. Proyecto Firebase **hub-comex** (plan Spark, gratis).
+- Firestore: `registros` (un documento por despacho/traslado), `fotos` (foto para el informe, ≤ 900 KB) y `miniaturas` (para la pantalla). Todo se ve igual en cualquier dispositivo, navegador y cuenta, en tiempo real.
+- Ingreso: se elige Ventas o Soporte (sin contraseñas). La app se identifica ante Firebase de forma **anónima** (Authentication → Anónimo habilitado) y las reglas de Firestore solo aceptan esas conexiones (`request.auth != null`).
+- Sin señal: Firestore guarda en el dispositivo y sube al volver la conexión.
+- Trazabilidad en cada registro: `creado/creadoPor`, `cerrado/cerradoPor`, `reabierto/reabiertoPor`, `modificado/modificadoPor`.
+- Límite gratis: 1 GB (≈ 5.000 fotos). Plan a futuro: pasar a SharePoint.
 
 - **Ingreso:** cuenta Microsoft de la empresa. Solo entran los correos listados en `config.js`. La sesión queda guardada en el dispositivo. Mientras `modo: 'prueba'`, se elige Ventas o Soporte y todo se guarda solo en el dispositivo.
 - **Fotos:** se guardan en el OneDrive de quien ingresa, en `Hub Comex/Despachos/AAAA-MM-DD - <nombre>/Foto_001.jpg` (o `Hub Comex/Traslados/...`).

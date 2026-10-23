@@ -1,6 +1,10 @@
 /* Hub Comex — app de Ventas para registrar despachos y traslados con fotos y generar su informe en Word.
  *
- * - Ingreso: Microsoft (MSAL) o modo prueba (se elige Ventas / Soporte). La sesión queda guardada en el dispositivo.
+ * Modos (config.js → modo):
+ *   'firebase'  : registros y fotos en Firebase (Firestore), sincronizados entre dispositivos y cuentas. Provisional.
+ *   'microsoft' : ingreso con Microsoft y todo en OneDrive (a futuro, SharePoint).
+ *   'prueba'    : sin nube; todo queda en el dispositivo.
+ * - Ingreso: Firebase (correo y contraseña), Microsoft (MSAL) o modo prueba (se elige Ventas / Soporte). La sesión queda guardada.
  * - Fotos: OneDrive → /<carpetaRaiz>/<Despachos|Traslados>/<AAAA-MM-DD - nombre>/Foto_001.jpg
  * - Cola de subida: IndexedDB. Si no hay señal, las fotos esperan en el celular.
  * - Registro: /<carpetaRaiz>/_registro-hub-comex.json (despachos y traslados, cada uno con su tipo).
@@ -18,9 +22,16 @@
   const DOCX_URL = 'https://cdn.jsdelivr.net/npm/docx@9.5.1/dist/index.iife.js';
   const LIMITE_SIMPLE = 4 * 1024 * 1024; // Graph acepta PUT directo hasta 4 MB
   const ES_FOTO = /\.(jpe?g|png|heic|heif|webp)$/i;
-  // Modo prueba (config modo: 'prueba', o …/#demo): sin Microsoft. Se elige Ventas o Soporte al ingresar
+  // Modo prueba (config modo: 'prueba', o …/#demo): sin nube. Se elige Ventas o Soporte al ingresar
   // y los registros y fotos se guardan solo en este dispositivo.
-  const DEMO = CFG.modo !== 'microsoft' || location.hash === '#demo' || window.HUB_DEMO === true;
+  const DEMO = !['microsoft', 'firebase'].includes(CFG.modo) || location.hash === '#demo' || window.HUB_DEMO === true;
+  const FB = !DEMO && CFG.modo === 'firebase';
+  const SIN_ONEDRIVE = DEMO || FB; // sin carpetas de OneDrive: se ocultan los botones y rutas de carpeta
+  // Con cuentas (firebaseCuentas: true) se ingresa con correo y contraseña. Sin cuentas, se elige Ventas o Soporte
+  // y la app se identifica ante Firebase de forma anónima (invisible), para que la base solo acepte conexiones de la app.
+  const FB_CUENTAS = FB && CFG.firebaseCuentas === true;
+  const FB_SDK = ['app', 'auth', 'firestore'].map(m => `https://www.gstatic.com/firebasejs/10.14.1/firebase-${m}-compat.js`);
+  const ELEGIR_CUENTA = DEMO || (FB && !FB_CUENTAS); // ingreso eligiendo Ventas / Soporte
   const DEMO_CUENTAS = {
     ventas: { username: 'ventas-sales@healthyfood.com.ec', name: 'Ventas' },
     soporte: { username: 'notificaciones@healthyfood.com.ec', name: 'Soporte' },
@@ -120,7 +131,6 @@
   const pad3 = n => String(n).padStart(3, '0');
   const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const fmtDate = d => new Date(d).toLocaleDateString('es-EC', { day: 'numeric', month: 'short', year: 'numeric' });
-  const fmtTime = d => new Date(d).toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
   const fmtSize = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -196,6 +206,7 @@
 
   async function graph(ruta, op = {}) {
     if (DEMO) return demoGraph(ruta, op);
+    if (FB) return fbGraph(ruta, op);
     const t = await token();
     const headers = { Authorization: 'Bearer ' + t, ...(op.headers || {}) };
     let body = op.body;
@@ -321,10 +332,131 @@
     throw demoError(400);
   }
 
+  // ---------- Firebase (provisional, hasta pasar a SharePoint) ----------
+  // Firestore: "registros" (un documento por despacho o traslado), "fotos" (foto reducida a calidad de informe)
+  // y "miniaturas" (versión pequeña para mostrar en pantalla). Sin señal, Firestore guarda en el dispositivo y sube luego.
+  let fbAuth = null, fbDb = null, fbEscucha = null;
+  const cargarScript = src => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new SinSenal());
+    document.head.appendChild(s);
+  });
+  async function iniciarFirebase() {
+    for (const src of FB_SDK) await cargarScript(src);
+    firebase.initializeApp(CFG.firebase);
+    fbDb = firebase.firestore();
+    try { await fbDb.enablePersistence({ synchronizeTabs: true }); } catch (_) { /* el navegador no lo permite: funciona igual, solo con señal */ }
+    fbAuth = firebase.auth();
+    const u = await new Promise(res => { const off = fbAuth.onAuthStateChanged(x => { off(); res(x); }); });
+    if (FB_CUENTAS) return u;
+    if (!u) await anonimo(); // queda guardado en el dispositivo; solo se hace la primera vez
+    return null;
+  }
+  // Identificación anónima ante Firebase. Sin señal se reintenta al volver la conexión.
+  async function anonimo() {
+    try { await fbAuth.signInAnonymously(); }
+    catch (e) { console.warn('Firebase anónimo', e.code); window.addEventListener('online', () => { if (!fbAuth.currentUser) anonimo(); }, { once: true }); }
+  }
+  const limpio = o => JSON.parse(JSON.stringify(o)); // Firestore no acepta valores "undefined"
+  const bytesFb = u8 => firebase.firestore.Blob.fromUint8Array(u8);
+  const blobDe = b => new Blob([b.toUint8Array()], { type: 'image/jpeg' });
+  // Espera la confirmación del servidor sin quedarse colgado: sin señal, la cola reintenta luego con el mismo id.
+  const conPlazo = (p, ms = 25000) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new SinSenal()), ms))]);
+
+  // JPEG dentro de un tamaño máximo, para que quepa en un documento de Firestore (límite 1 MB).
+  async function jpeg(blob, lado, calidad, maxBytes) {
+    const img = await createImageBitmap(blob);
+    let k = Math.min(1, lado / Math.max(img.width, img.height)), q = calidad, b, c;
+    for (let i = 0; i < 6; i++) {
+      c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      b = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+      if (b.size <= maxBytes) break;
+      q = Math.max(0.45, q - 0.1); k *= 0.85;
+    }
+    return { u8: new Uint8Array(await b.arrayBuffer()), w: c.width, h: c.height };
+  }
+
+  async function fbLeerRegistros() {
+    const snap = await fbDb.collection('registros').get();
+    return { despachos: snap.docs.map(x => x.data()) };
+  }
+  // Guarda solo los registros que cambiaron (con quién y cuándo). Sin señal, Firestore los deja en cola.
+  function fbGuardarCambios(antes, data) {
+    const previo = new Map(antes.despachos.map(x => [x.id, JSON.stringify(x)]));
+    const lote = fbDb.batch();
+    const ahora = new Date().toISOString();
+    let n = 0;
+    for (const x of data.despachos) {
+      const igual = previo.get(x.id) === JSON.stringify(x);
+      previo.delete(x.id);
+      if (igual) continue;
+      x.modificado = ahora; x.modificadoPor = cuenta.username;
+      lote.set(fbDb.collection('registros').doc(x.id), limpio(x)); n++;
+    }
+    for (const id of previo.keys()) { lote.delete(fbDb.collection('registros').doc(id)); n++; }
+    if (n) lote.commit().catch(e => { console.error('Firestore', e); toast('No se pudo guardar en la nube. Avisa a soporte.'); });
+  }
+  // Tiempo real: lo que se registra en otro dispositivo o cuenta aparece aquí sin recargar.
+  function fbEscuchar() {
+    if (fbEscucha) fbEscucha();
+    fbEscucha = fbDb.collection('registros').onSnapshot(snap => {
+      registro = aplicarPendientes({ despachos: snap.docs.map(x => x.data()) });
+      cache.guardar('registro.' + usuarioDatos(), registro);
+      refrescar();
+      const lista = document.getElementById('lista');
+      if (st.view === 'registros' && lista && document.activeElement?.id !== 'q') lista.innerHTML = listaRegistro();
+    }, e => {
+      console.error('Firestore', e);
+      // Si aún no hay identificación (p. ej. se abrió sin señal), se vuelve a escuchar cuando la haya.
+      if (e.code === 'permission-denied' && fbAuth) { const off = fbAuth.onAuthStateChanged(u => { if (u) { off(); fbEscuchar(); } }); }
+    });
+  }
+  // Las mismas operaciones que usa la app con OneDrive, pero sobre Firestore.
+  async function fbGraph(ruta, op) {
+    const metodo = op.method || 'GET';
+    let m;
+    if ((m = /^\/me\/drive\/items\/([^/:?]+)\/children\?/.exec(ruta))) { // fotos de un registro (miniaturas)
+      const snap = await fbDb.collection('miniaturas').where('registroId', '==', m[1]).get();
+      return { value: snap.docs.map(x => { const f = x.data(); return { id: x.id, name: f.nombre, file: {}, thumbnails: f.data ? [{ medium: { url: URL.createObjectURL(blobDe(f.data)) } }] : [] }; }) };
+    }
+    if ((m = /^\/me\/drive\/items\/([^/:?]+)$/.exec(ruta)) && metodo === 'DELETE') {
+      const id = m[1];
+      const lote = fbDb.batch();
+      if (buscar(id)) { // registro completo: se borran todas sus fotos
+        const snap = await fbDb.collection('miniaturas').where('registroId', '==', id).get();
+        snap.docs.forEach(x => { lote.delete(x.ref); lote.delete(fbDb.collection('fotos').doc(x.id)); });
+      } else {
+        lote.delete(fbDb.collection('fotos').doc(id));
+        lote.delete(fbDb.collection('miniaturas').doc(id));
+      }
+      await conPlazo(lote.commit());
+      return null;
+    }
+    throw new Error('Firebase: operación no soportada ' + ruta);
+  }
+  async function fbSubirFoto(it) {
+    if (!navigator.onLine) throw new SinSenal();
+    const [grande, mini] = await Promise.all([jpeg(it.blob, 1600, 0.78, 900 * 1024), jpeg(it.blob, 360, 0.6, 60 * 1024)]);
+    const comun = { registroId: it.despachoId, nombre: it.archivo, creado: new Date().toISOString(), creadoPor: cuenta.username };
+    const lote = fbDb.batch();
+    lote.set(fbDb.collection('fotos').doc(it.id), { ...comun, data: bytesFb(grande.u8), w: grande.w, h: grande.h });
+    lote.set(fbDb.collection('miniaturas').doc(it.id), { ...comun, data: bytesFb(mini.u8) });
+    await conPlazo(lote.commit(), 60000);
+    return { id: it.id, name: it.archivo };
+  }
+  async function fbFotoGrande(id) {
+    const x = await fbDb.collection('fotos').doc(id).get();
+    if (!x.exists) throw new Error('no está');
+    return blobDe(x.data().data);
+  }
+
   // ---------- Registro (despachos y traslados) ----------
   let registro = { despachos: [] };
   // En modo prueba Ventas y Soporte comparten los datos del dispositivo; con Microsoft, cada cuenta usa su OneDrive.
-  const usuarioDatos = () => (DEMO ? 'compartido' : cuenta.username);
+  // En Firebase todo está en la nube compartida, así que lo local también se comparte entre cuentas del dispositivo.
+  const usuarioDatos = () => (DEMO || FB ? 'compartido' : cuenta.username);
   const clavePend = () => 'pendientes.' + usuarioDatos();
 
   // Une cambios de datos/inspección sobre un registro (la inspección se mezcla punto por punto).
@@ -345,6 +477,11 @@
 
   async function leerRegistro() {
     let data;
+    if (FB) {
+      data = await fbLeerRegistros();
+      data.despachos.forEach(x => { if (!x.tipo) x.tipo = 'despacho'; });
+      return data;
+    }
     try {
       const meta = await graph(REGISTRO);
       let r;
@@ -368,9 +505,12 @@
   // Lee lo último de OneDrive, aplica los cambios pendientes y el cambio pedido, y lo guarda.
   async function cambiarRegistro(cambio) {
     const pendAntes = JSON.stringify(cache.leer(clavePend()) || {});
-    const data = aplicarPendientes(await leerRegistro());
+    const base = await leerRegistro();
+    const antes = FB ? JSON.parse(JSON.stringify(base)) : null;
+    const data = aplicarPendientes(base);
     cambio(data);
-    await graph(REGISTRO + ':/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 1) });
+    if (FB) fbGuardarCambios(antes, data);
+    else await graph(REGISTRO + ':/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data, null, 1) });
     if (JSON.stringify(cache.leer(clavePend()) || {}) === pendAntes) cache.quitar(clavePend());
     registro = aplicarPendientes(data);
     cache.guardar('registro.' + usuarioDatos(), registro);
@@ -420,13 +560,18 @@
   async function crearRegistro(tipo, datos) {
     const fecha = new Date();
     const { nombre } = nombreCarpeta(datos.nombre, fecha);
-    const padre = await carpetaTipo(tipo);
-    // "rename": si ya existe una carpeta con ese nombre, OneDrive agrega un número al final
-    const f = await graph(`/me/drive/items/${padre}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
+    let f;
+    if (FB) f = { id: fbDb.collection('registros').doc().id, name: nombre, webUrl: '' }; // en Firebase no hay carpetas
+    else {
+      const padre = await carpetaTipo(tipo);
+      // "rename": si ya existe una carpeta con ese nombre, OneDrive agrega un número al final
+      f = await graph(`/me/drive/items/${padre}/children`, { method: 'POST', json: { name: nombre, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' } });
+    }
     const d = {
       id: f.id, tipo, nombre: datos.nombre.trim().replace(/\s+/g, ' '), carpeta: f.name, webUrl: f.webUrl,
       fecha: fecha.toISOString(), estado: 'proceso', cerrado: null, fotos: 0, inspeccion: {},
-      productos: [], totalCajas: '', totalPallets: '', observaciones: '', informeFotos: []
+      productos: [], totalCajas: '', totalPallets: '', observaciones: '', informeFotos: [],
+      creado: fecha.toISOString(), creadoPor: cuenta.username // trazabilidad
     };
     CAMPOS.forEach(([k]) => { d[k] = (datos[k] || '').trim(); });
     await cambiarRegistro(r => r.despachos.unshift(d));
@@ -453,6 +598,7 @@
   const pendientesDe = id => cola.filter(x => x.despachoId === id);
 
   async function subirArchivo(it) {
+    if (FB) return fbSubirFoto(it);
     const ruta = `/me/drive/items/${it.folderId}:/${encodeURIComponent(it.archivo)}:`;
     if (DEMO || it.blob.size <= LIMITE_SIMPLE) {
       return graph(`${ruta}/content?@microsoft.graph.conflictBehavior=rename`, { method: 'PUT', headers: { 'Content-Type': it.blob.type || 'image/jpeg' }, body: it.blob });
@@ -594,6 +740,7 @@
           try {
             if (!it) throw new Error('no está');
             if (DEMO) { const b = await idb.leer('demofoto.' + it.id); if (!b) throw new Error('sin archivo'); blobs.set(n, b); }
+            else if (FB) blobs.set(n, await fbFotoGrande(it.id));
             else {
               const meta = await graph(`/me/drive/items/${it.id}`);
               const resp = await fetch(meta['@microsoft.graph.downloadUrl']);
@@ -701,11 +848,26 @@
 
   // ---------- Pantallas ----------
   function vIngreso() {
+    if (FB_CUENTAS) {
+      return `<main class="wrap"><section class="login">
+        <div class="mark">HC</div>
+        <h1>Hub Comex</h1>
+        <form id="f-login" class="login-form" novalidate>
+          <div class="field"><label for="l-correo">Correo</label>
+            <input class="input" id="l-correo" type="email" autocomplete="username" inputmode="email" placeholder="ventas-sales@healthyfood.com.ec" value="${esc(st.correo || '')}"></div>
+          <div class="field"><label for="l-clave">Contraseña</label>
+            <input class="input" id="l-clave" type="password" autocomplete="current-password"></div>
+          ${st.errorLogin ? `<p class="warn">${ic('alert')}<span>${esc(st.errorLogin)}</span></p>` : ''}
+          <button class="btn primary big block" type="submit" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Ingresando…' : ic('lock') + 'Iniciar sesión'}</button>
+          <button type="button" class="link" data-act="olvide">¿Olvidaste tu contraseña?</button>
+        </form>
+      </section></main>`;
+    }
     return `<main class="wrap"><section class="login">
       <div class="mark">HC</div>
       <h1>Hub Comex</h1>
       <button class="btn primary big block" data-act="ingresar">${ic('lock')}Iniciar sesión</button>
-      ${DEMO && st.opcionesDemo ? `<div class="demo-box">
+      ${ELEGIR_CUENTA && st.opcionesDemo ? `<div class="demo-box">
         <span class="eyebrow">Elige con qué cuenta entrar</span>
         <button class="btn" data-act="demologin" data-u="ventas">Ventas<span>uso normal</span></button>
         <button class="btn" data-act="demologin" data-u="soporte">Soporte<span>pruebas</span></button>
@@ -759,12 +921,12 @@
         <span class="meta">${sub} <span class="pill ${d.estado}">${d.estado === 'proceso' ? 'En proceso' : 'Cerrado'}</span></span>
       </button>
       <button class="icon-btn" data-act="informe" data-id="${esc(d.id)}" aria-label="Descargar informe en Word" title="Informe Word">${st.generando === d.id ? ic('spin') : ic('doc')}</button>
-      ${DEMO ? '' : `<a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>`}
+      ${SIN_ONEDRIVE ? '' : `<a class="icon-btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener" aria-label="Abrir carpeta en OneDrive" title="Abrir carpeta">${ic('folder')}</a>`}
     </div>`;
   }
   function notas() {
     const pend = enCola().length;
-    return `${st.rol === 'soporte' && !DEMO ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
+    return `${st.rol === 'soporte' && !SIN_ONEDRIVE ? `<div class="note info">${ic('info')}<span>Estás en modo soporte. Tus pruebas se guardan en tu propio OneDrive, no en el de Ventas.</span></div>` : ''}
       ${pend ? `<div class="note ${sinSenal ? 'bad' : ''}">${ic(sinSenal ? 'nosignal' : 'cloud')}<span>${pend} ${pend === 1 ? 'foto' : 'fotos'} ${sinSenal ? 'esperando señal para subir.' : 'subiendo…'}</span></div>` : ''}`;
   }
 
@@ -784,6 +946,8 @@
     return `<main class="wrap areas-wrap">
       <div class="areas-head"><h1>${saludo()}, ${nombre}</h1><p>¿Qué vas a registrar hoy?</p></div>
       ${notas()}
+      ${st.migrar ? `<div class="note">${ic('cloud')}<span>Hay <b>${st.migrar} ${st.migrar === 1 ? 'registro guardado' : 'registros guardados'} solo en este dispositivo</b>, de antes de conectar la nube.
+        <button class="link" data-act="migrar" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? 'Subiendo…' : 'Subirlos a la nube'}</button></span></div>` : ''}
       <div class="areas">
         ${area('despacho', 'truck', 'Exportación de producto · fotos e informe')}
         ${area('traslado', 'swap', 'Traslado de producto · fotos e informe')}
@@ -925,7 +1089,7 @@
         <input class="input" id="nuevo-nombre" data-campo="nombre" autocomplete="off" placeholder="${esc(t.ej)}" value="${esc(n.nombre || '')}" maxlength="120">
         <p class="help">Será el nombre de la carpeta. Escríbelo como lo vas a buscar después.</p>
       </div>
-      <div class="preview-path" id="ruta">${vistaRuta(nombre, quitados)}</div>
+      <div class="preview-path" id="ruta" ${SIN_ONEDRIVE ? 'hidden' : ''}>${vistaRuta(nombre, quitados)}</div>
       <div class="form-grid">${NUEVO_CAMPOS.map(c => campo(c, n[c[0]], 'nuevo')).join('')}</div>
       <p class="help">La fecha se guarda sola al crear. El resto de datos (transporte, sellos, productos, personal) se llena dentro del ${t.uno}.</p>
       ${sugerencias()}
@@ -944,7 +1108,7 @@
     let cls = '', icon = 'cloud', linea, ayuda;
     if (vista.cargando && !total) { linea = 'Revisando fotos…'; ayuda = ''; }
     else if (!total) { linea = 'Aún no hay fotos subidas'; ayuda = ''; }
-    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} ${total === 1 ? 'foto subida' : 'fotos subidas'}`; ayuda = DEMO ? 'Están guardadas en la carpeta.' : 'Ya están en OneDrive.'; }
+    else if (!esperando) { cls = 'ok'; icon = 'cloudok'; linea = `${total} ${total === 1 ? 'foto subida' : 'fotos subidas'}`; ayuda = DEMO ? 'Están guardadas en la carpeta.' : FB ? 'Ya están en la nube.' : 'Ya están en OneDrive.'; }
     else if (sinSenal) { cls = 'off'; icon = 'nosignal'; linea = `${subidas} de ${total} fotos subidas`; ayuda = `<b>Sin señal.</b> ${esperando} ${esperando === 1 ? 'foto espera' : 'fotos esperan'} en el celular y se ${esperando === 1 ? 'subirá' : 'subirán'} solas cuando vuelva la conexión.`; }
     else { cls = 'going'; icon = 'cloud'; linea = `${subidas} de ${total} fotos subidas`; ayuda = 'Subiendo en segundo plano. No cierres la app hasta que terminen.'; }
     return `${borradores ? `<div class="stage">
@@ -1056,15 +1220,16 @@
       <div class="d-head">
         <span class="eyebrow">${t.Uno}</span>
         <h1>${esc(d.nombre)}</h1>
-        <div class="d-meta"><span class="pill ${d.estado}">${abierto ? 'En proceso' : 'Cerrado'}</span><span>${fmtDate(d.fecha)} · ${fmtTime(d.fecha)}${d.cliente ? ' · ' + esc(d.cliente) : ''}</span></div>
-        <div class="crumbs">${ic('folder')}OneDrive › ${esc(RAIZ)} › ${esc(t.carpeta)} › <b>${esc(d.carpeta)}</b></div>
+        <div class="d-meta"><span class="pill ${d.estado}">${abierto ? 'En proceso' : 'Cerrado'}</span><span>${fmtDate(d.fecha)}${d.cliente ? ' · ' + esc(d.cliente) : ''}</span></div>
+        ${traza(d)}
+        ${SIN_ONEDRIVE ? '' : `<div class="crumbs">${ic('folder')}OneDrive › ${esc(RAIZ)} › ${esc(t.carpeta)} › <b>${esc(d.carpeta)}</b></div>`}
       </div>
       ${abierto ? `
         <div class="row">
           <button class="btn primary big" data-act="camara" style="flex:2 1 200px">${ic('camera')}Tomar foto</button>
           <button class="btn big" data-act="galeria" style="flex:1 1 140px">${ic('image')}Desde el celular</button>
         </div>` : `
-        <div class="closed-note"><span>${t.Uno} cerrado el ${fmtDate(d.cerrado)} (${fmtTime(d.cerrado)}). Si faltó alguna foto, reábrelo para agregarla.</span>
+        <div class="closed-note"><span>${t.Uno} cerrado el ${fmtDate(d.cerrado)}. Si faltó alguna foto, reábrelo para agregarla.</span>
           <button class="btn" data-act="reabrir" ${st.ocupado ? 'disabled' : ''}>${ic('redo')}Reabrir para agregar fotos</button></div>`}
       ${cajaSubida(d)}
       <section class="list">
@@ -1079,12 +1244,24 @@
       ${sugerencias(d)}
       <div class="row">
         <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
-        ${DEMO ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>`}
+        ${SIN_ONEDRIVE ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>`}
       </div>
       ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
         ${borradores ? `<p class="help">Para cerrar, primero sube las ${borradores} ${borradores === 1 ? 'foto' : 'fotos'} que están en el celular o elimínalas.</p>` : ''}` : ''}
       <button class="btn block ghost danger" data-act="preeliminar" ${st.ocupado ? 'disabled' : ''}>${ic('trash')}Eliminar ${t.uno}</button>
     </main>`;
+  }
+
+  // Trazabilidad: quién creó, cerró, reabrió o modificó por última vez (las horas quedan guardadas en la nube).
+  function traza(d) {
+    const quien = c => (rolDe(c) === 'soporte' ? 'Soporte' : rolDe(c) === 'ventas' ? 'Ventas' : c || '');
+    const partes = [
+      d.creadoPor && `Creado por ${quien(d.creadoPor)}`,
+      d.estado === 'cerrado' && d.cerradoPor && `cerrado por ${quien(d.cerradoPor)}`,
+      d.estado !== 'cerrado' && d.reabiertoPor && `reabierto por ${quien(d.reabiertoPor)}`,
+      d.modificadoPor && `última modificación: ${quien(d.modificadoPor)}`
+    ].filter(Boolean);
+    return partes.length ? `<p class="traza">${partes.join(' · ')}</p>` : '';
   }
 
   // Confirmación para eliminar un despacho o traslado completo.
@@ -1097,7 +1274,7 @@
       <span class="eyebrow">Eliminar ${t.uno}</span>
       <h2 style="font-size:20px">¿Eliminar "${esc(d.nombre)}"?</h2>
       <p class="help">Se borran el registro${nFotos ? `, sus datos y ${nFotos === 1 ? 'su foto' : `sus ${nFotos} fotos`}` : ' y sus datos'}.
-        ${DEMO ? 'Esta acción no se puede deshacer.' : 'La carpeta queda en la papelera de OneDrive por si fue un error.'}</p>
+        ${SIN_ONEDRIVE ? 'Esta acción no se puede deshacer.' : 'La carpeta queda en la papelera de OneDrive por si fue un error.'}</p>
       <button class="btn block primary peligro" data-act="eliminar" ${st.ocupado ? 'disabled' : ''}>${st.ocupado ? ic('spin') + 'Eliminando…' : ic('trash') + 'Sí, eliminar'}</button>
       <button class="btn block" data-act="noeliminar">Cancelar</button>
     </div></div>`;
@@ -1185,7 +1362,7 @@
       if (d && d.fotos !== vista.nube.length) cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === id); if (x) x.fotos = vista.nube.length; }).catch(() => {});
     } catch (e) {
       if (vista.id !== id) return;
-      vista.error = e instanceof SinSenal ? 'Sin señal: no se pueden mostrar las fotos que ya están en OneDrive.' : 'No se pudieron cargar las fotos.';
+      vista.error = e instanceof SinSenal ? 'Sin señal: no se pueden mostrar las fotos que ya están en la nube.' : 'No se pudieron cargar las fotos.';
     }
     vista.cargando = false;
     render();
@@ -1279,12 +1456,25 @@
         break;
       }
       case 'ingresar':
-        if (DEMO) { st.opcionesDemo = true; render(); } else ingresar();
+        if (ELEGIR_CUENTA) { st.opcionesDemo = true; render(); } else ingresar();
         break;
       case 'demologin': iniciarDemo(b.dataset.u); break;
       case 'salir':
-        if (DEMO) { try { localStorage.removeItem(SESION_DEMO); } catch (_) {} location.reload(); } else salir();
+        if (ELEGIR_CUENTA) { if (fbEscucha) fbEscucha(); try { localStorage.removeItem(SESION_DEMO); } catch (_) {} location.reload(); }
+        else if (FB) { if (fbEscucha) fbEscucha(); fbAuth.signOut().finally(() => location.reload()); }
+        else salir();
         break;
+      case 'migrar': if (!st.ocupado) subirDatosLocales(); break;
+      case 'olvide': {
+        const correo = (document.getElementById('l-correo')?.value || '').trim();
+        if (!correo) { st.errorLogin = 'Escribe tu correo y vuelve a tocar "¿Olvidaste tu contraseña?".'; render(); break; }
+        try {
+          await fbAuth.sendPasswordResetEmail(correo);
+          st.errorLogin = null; st.correo = correo; render();
+          toast('Te enviamos un correo para crear una contraseña nueva.');
+        } catch (_) { st.errorLogin = 'No se pudo enviar el correo. Revisa que esté bien escrito.'; st.correo = correo; render(); }
+        break;
+      }
       case 'recargar': location.reload(); break;
       case 'menu': st.menu = true; render(); break;
       case 'cerrarmenu': if (e.target === b || b.tagName === 'BUTTON') { st.menu = false; render(); } break;
@@ -1318,7 +1508,7 @@
           st.abiertos = {};
           vista = { id: nd.id, nube: [], cargando: false, error: null };
           ir('despacho');
-          toast(DEMO ? 'Carpeta creada' : 'Carpeta creada en OneDrive');
+          toast(SIN_ONEDRIVE ? `${T(st.tipo).Uno} creado` : 'Carpeta creada en OneDrive');
         } catch (err) {
           st.ocupado = false; render();
           toast(errorAMensaje(err, 'crear la carpeta'));
@@ -1427,7 +1617,7 @@
           d.fotos = n;
           if ((d.informeFotos || []).includes(b.dataset.n)) guardarDetalles(d.id, { informeFotos: d.informeFotos.filter(x => x !== b.dataset.n) });
           cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); if (x) x.fotos = n; }).catch(() => {});
-          toast(DEMO ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
+          toast(SIN_ONEDRIVE ? 'Foto eliminada' : 'Foto eliminada. Si fue un error, está en la papelera de OneDrive.');
         } catch (err) {
           toast(err.status === 404 ? 'Esa foto ya no estaba en la carpeta.' : errorAMensaje(err, 'eliminar la foto'));
           if (err.status === 404) vista.nube = vista.nube.filter(f => f.id !== id);
@@ -1443,7 +1633,7 @@
         st.ocupado = true; render();
         try {
           const n = await contarFotos(d.id);
-          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'cerrado'; x.cerrado = new Date().toISOString(); x.fotos = Math.max(n, x.fotos || 0); });
+          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'cerrado'; x.cerrado = new Date().toISOString(); x.cerradoPor = cuenta.username; x.fotos = Math.max(n, x.fotos || 0); });
           st.ocupado = false;
           ir('modulo');
           toast(`${T(d).Uno} "${d.nombre}" cerrado`);
@@ -1456,7 +1646,7 @@
       case 'reabrir': {
         st.ocupado = true; render();
         try {
-          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'proceso'; x.cerrado = null; });
+          await cambiarRegistro(reg => { const x = reg.despachos.find(y => y.id === d.id); x.estado = 'proceso'; x.cerrado = null; x.reabierto = new Date().toISOString(); x.reabiertoPor = cuenta.username; });
           toast(`${T(d).Uno} reabierto`);
         } catch (err) { toast(errorAMensaje(err, `reabrir el ${T(d).uno}`)); }
         st.ocupado = false; render();
@@ -1536,6 +1726,15 @@
     if (clave === 'otro') { ir('sinacceso'); return; }
     try { localStorage.setItem(SESION_DEMO, clave); } catch (_) {}
     st.rol = clave;
+    if (FB) { // Firebase sin cuentas: se elige Ventas o Soporte, pero los datos van a la nube
+      registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
+      await refrescarCola();
+      ir('areas');
+      fbEscuchar();
+      procesarCola();
+      revisarDatosLocales();
+      return;
+    }
     await demoCargar();
     await cargarRegistro();
     await refrescarCola();
@@ -1543,7 +1742,91 @@
     procesarCola();
   }
 
+  const rolDe = correo => {
+    const permitidos = {};
+    Object.keys(CFG.correosPermitidos || {}).forEach(k => { permitidos[k.toLowerCase()] = CFG.correosPermitidos[k]; });
+    return permitidos[(correo || '').toLowerCase()] || null;
+  };
+  async function entrarFirebase(u) {
+    st.rol = rolDe(u.email);
+    cuenta = { username: (u.email || '').toLowerCase(), name: st.rol === 'soporte' ? 'Soporte' : st.rol === 'ventas' ? 'Ventas' : u.email };
+    if (!st.rol) { ir('sinacceso'); return; }
+    registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });
+    await refrescarCola();
+    ir('areas');
+    fbEscuchar();
+    procesarCola();
+    revisarDatosLocales();
+  }
+  // Registros hechos antes de la nube (modo prueba, solo en este dispositivo): se ofrece subirlos.
+  function revisarDatosLocales() {
+    const d = cache.leer('demo.datos.v6');
+    if (!d || cache.leer('migrado.v6')) return;
+    const n = (JSON.parse(d.registro || '{}').despachos || []).length;
+    if (n) { st.migrar = n; render(); } else cache.guardar('migrado.v6', true);
+  }
+  async function subirDatosLocales() {
+    const d = cache.leer('demo.datos.v6');
+    const regs = JSON.parse(d.registro || '{}').despachos || [];
+    st.ocupado = true; render();
+    try {
+      const lote = fbDb.batch();
+      regs.forEach(x => lote.set(fbDb.collection('registros').doc(x.id), limpio({ ...x, creadoPor: x.creadoPor || cuenta.username, creado: x.creado || x.fecha })));
+      await conPlazo(lote.commit(), 60000);
+      let fotos = 0;
+      for (const c of d.carpetas || []) {
+        if (!regs.some(x => x.id === c.id)) continue;
+        for (const f of c.fotos || []) {
+          const blob = await idb.leer('demofoto.' + f.id).catch(() => null);
+          if (!blob) continue;
+          await fbSubirFoto({ id: f.id, despachoId: c.id, archivo: f.name, blob });
+          fotos++;
+        }
+      }
+      cache.guardar('migrado.v6', true);
+      st.migrar = 0;
+      toast(`Listo: ${regs.length} ${regs.length === 1 ? 'registro' : 'registros'} y ${fotos} fotos ya están en la nube.`);
+    } catch (e) {
+      console.error(e);
+      toast(errorAMensaje(e, 'subir los registros de este dispositivo'));
+    }
+    st.ocupado = false; render();
+  }
+  document.addEventListener('submit', async e => {
+    if (e.target.id !== 'f-login') return;
+    e.preventDefault();
+    const correo = document.getElementById('l-correo').value.trim();
+    const clave = document.getElementById('l-clave').value;
+    st.correo = correo;
+    if (!correo || !clave) { st.errorLogin = 'Escribe tu correo y tu contraseña.'; render(); return; }
+    st.ocupado = true; st.errorLogin = null; render();
+    try {
+      const r = await fbAuth.signInWithEmailAndPassword(correo, clave);
+      st.ocupado = false;
+      await entrarFirebase(r.user);
+    } catch (err) {
+      st.ocupado = false;
+      const c = err.code || '';
+      st.errorLogin = /invalid-credential|wrong-password|user-not-found|invalid-email/.test(c) ? 'Correo o contraseña incorrectos.'
+        : /too-many-requests/.test(c) ? 'Demasiados intentos. Espera unos minutos y vuelve a probar.'
+        : /network/.test(c) ? 'No hay conexión a internet. Para ingresar la primera vez se necesita señal.'
+        : 'No se pudo iniciar sesión. Intenta de nuevo.';
+      render();
+    }
+  });
+
   async function arrancar() {
+    if (FB) {
+      if (!CFG.firebase || !CFG.firebase.apiKey || /PEGAR/.test(CFG.firebase.apiKey)) { ir('falla', { error: 'Falta configurar la conexión a la nube (config.js). Avisa a soporte.' }); return; }
+      let u;
+      try { u = await iniciarFirebase(); }
+      catch (e) { console.error(e); ir('falla', { error: 'No se pudo conectar con la nube. Revisa la conexión a internet e intenta de nuevo.' }); return; }
+      if (FB_CUENTAS) { if (u) await entrarFirebase(u); else ir('ingreso'); return; }
+      let guardada = null;
+      try { guardada = localStorage.getItem(SESION_DEMO); } catch (_) {}
+      if (guardada && DEMO_CUENTAS[guardada]) await iniciarDemo(guardada); else ir('ingreso');
+      return;
+    }
     if (DEMO) {
       let guardada = null;
       try { guardada = localStorage.getItem(SESION_DEMO); } catch (_) {}
@@ -1557,9 +1840,7 @@
     catch (e) { console.error(e); ir('falla', { error: 'No se pudo iniciar sesión con Microsoft. Intenta de nuevo.' }); return; }
     if (!cuenta) { ir('ingreso'); return; }
 
-    const permitidos = {};
-    Object.keys(CFG.correosPermitidos || {}).forEach(k => { permitidos[k.toLowerCase()] = CFG.correosPermitidos[k]; });
-    st.rol = permitidos[(cuenta.username || '').toLowerCase()] || null;
+    st.rol = rolDe(cuenta.username);
     if (!st.rol) { ir('sinacceso'); return; }
 
     registro = aplicarPendientes(cache.leer('registro.' + usuarioDatos()) || { despachos: [] });

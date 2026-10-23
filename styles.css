@@ -225,7 +225,10 @@ textarea.input { resize: vertical; min-height: 96px; line-height: 1.45; }
 /* Despacho */
 .d-head { display: flex; flex-direction: column; gap: 8px; }
 .d-head h1 { font-size: 25px; overflow-wrap: anywhere; }
-.d-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13.5px; }
+.traza { font-size: 12.5px; color: var(--muted); }
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-form .link { align-self: center; }
+.d-meta {display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 13.5px; }
 .upbox { border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); padding: 13px 14px; display: flex; flex-direction: column; gap: 9px; }
 .upline { display: flex; align-items: center; gap: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .upline .s { margin-left: auto; font-weight: 500; font-size: 13px; color: var(--muted); }

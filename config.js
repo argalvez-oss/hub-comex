@@ -1,9 +1,26 @@
 // Configuración de Hub Comex.
 // Completar antes de publicar (ver README.md, sección "Configuración en Azure").
 window.HUB_CONFIG = {
-  // 'prueba': se elige Ventas o Soporte al ingresar y todo se guarda solo en el dispositivo (sin Microsoft).
+  // 'firebase' : ingreso con correo y contraseña; registros y fotos en la nube (Firebase), iguales en todos los dispositivos.
+  // 'prueba'   : se elige Ventas o Soporte al ingresar y todo se guarda solo en el dispositivo.
   // 'microsoft': ingreso con la cuenta de Microsoft y fotos en OneDrive (requiere los permisos aprobados).
-  modo: 'prueba',
+  modo: 'firebase',
+
+  // false: sin cuentas, se elige Ventas o Soporte al ingresar; la app se identifica de forma anónima ante Firebase
+  //        (Authentication → Anónimo habilitado; reglas: request.auth != null).
+  // true : correo y contraseña creados en Firebase → Authentication (y reglas solo para esos correos).
+  firebaseCuentas: false,
+
+  // Proyecto de Firebase "hub-comex" (consola → Configuración del proyecto → Tus apps → Hub Comex).
+  // No es una contraseña: es la dirección pública del proyecto. La seguridad la dan las reglas de Firestore.
+  firebase: {
+    apiKey: 'AIzaSyCYDX-w_gD3XJ7BAdi5U0m8UFnP3RYSnwc',
+    authDomain: 'hub-comex.firebaseapp.com',
+    projectId: 'hub-comex',
+    storageBucket: 'hub-comex.firebasestorage.app',
+    messagingSenderId: '130916289619',
+    appId: '1:130916289619:web:90518a5a48496eda6acaa6'
+  },
 
   // Registro de la app en Microsoft Entra ID (Azure) → "Id. de aplicación (cliente)".
   // Registro propio "Hub Comex". PENDIENTE: un administrador debe aprobar sus permisos.
