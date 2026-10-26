@@ -279,6 +279,15 @@ textarea.input { resize: vertical; min-height: 96px; line-height: 1.45; }
 .review-bar .btn { flex: 1; min-height: 56px; font-size: 16px; }
 .review-bar .btn.sec { background: #1d2621; border-color: #2d3832; color: #eef3ef; }
 .review-bar .btn.acc { background: #72c697; border-color: #72c697; color: #0b1a12; }
+/* Visor de fotos en alta calidad */
+.tile[data-act="ver"] { cursor: zoom-in; }
+.visor .review-img { position: relative; display: block; margin: 0 12px; }
+.visor .review-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; border-radius: 8px; }
+.visor-x { margin-left: 8px; width: 36px; height: 36px; border-radius: 50%; border: 0; background: #1d2621; color: #eef3ef; display: grid; place-items: center; }
+.visor-carga { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 8px; background: rgba(0,0,0,.65); color: #fff; padding: 7px 12px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+.visor-carga svg { width: 16px; height: 16px; animation: spin 1s linear infinite; }
+.review-bar .btn.visor-nav { flex: 0 0 56px; }
+.review-bar .btn.visor-nav:disabled { opacity: .35; }
 .review .hint { text-align: center; font-size: 13px; color: #a9b6ae; padding: 8px 16px 0; }
 
 /* Registro */

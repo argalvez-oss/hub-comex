@@ -438,7 +438,8 @@
   }
   async function fbSubirFoto(it) {
     if (!navigator.onLine) throw new SinSenal();
-    const [grande, mini] = await Promise.all([jpeg(it.blob, 1600, 0.78, 900 * 1024), jpeg(it.blob, 360, 0.6, 60 * 1024)]);
+    // Foto grande lo más nítida posible dentro del límite de Firestore (1 MB por documento); miniatura solo para la lista.
+    const [grande, mini] = await Promise.all([jpeg(it.blob, 1920, 0.86, 950 * 1024), jpeg(it.blob, 360, 0.6, 60 * 1024)]);
     const comun = { registroId: it.despachoId, nombre: it.archivo, creado: new Date().toISOString(), creadoPor: cuenta.username };
     const lote = fbDb.batch();
     lote.set(fbDb.collection('fotos').doc(it.id), { ...comun, data: bytesFb(grande.u8), w: grande.w, h: grande.h });
@@ -715,15 +716,72 @@
       document.head.appendChild(s);
     });
   }
-  // Reduce una imagen para el informe (1280 px, JPEG) y devuelve sus bytes y medidas.
+  // Reduce una imagen para el informe (1600 px, JPEG) y devuelve sus bytes y medidas.
   async function prepararFoto(blob) {
     const img = await createImageBitmap(blob);
-    const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height));
     const c = document.createElement('canvas');
     c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+    const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.86));
     return { data: new Uint8Array(await b.arrayBuffer()), w: c.width, h: c.height };
+  }
+  // Foto en tamaño completo (no la miniatura): de la nube, de OneDrive o del dispositivo, según el modo.
+  async function fotoNube(id) {
+    if (DEMO) { const b = await idb.leer('demofoto.' + id); if (!b) throw new Error('sin archivo'); return b; }
+    if (FB) return fbFotoGrande(id);
+    const meta = await graph(`/me/drive/items/${id}`);
+    const resp = await fetch(meta['@microsoft.graph.downloadUrl']);
+    if (!resp.ok) throw new Error('descarga');
+    return resp.blob();
+  }
+  function bajarArchivo(blob, nombre) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nombre.replace(/[\\/:*?"<>|]/g, '-');
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+  }
+
+  // ---------- Descargar todas las fotos de un registro (.zip) ----------
+  const JSZIP_URL = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+  function cargarJSZip() {
+    if (window.JSZip) return Promise.resolve();
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = JSZIP_URL;
+      s.onload = () => (window.JSZip ? res() : rej(new Error('JSZip no disponible')));
+      s.onerror = () => { s.remove(); rej(new SinSenal()); };
+      document.head.appendChild(s);
+    });
+  }
+  async function descargarZip(d) {
+    if (window.HUB_DEMO) { toast('Desde este enlace no se pueden descargar archivos. Usa la app publicada en GitHub.'); return; }
+    st.generandoZip = d.id; render();
+    try {
+      await cargarJSZip();
+      const archivos = new Map(); // nombre → foto
+      for (const x of pendientesDe(d.id)) archivos.set(x.archivo, x.blob); // las que aún están en el celular
+      let faltan = 0;
+      const r = await graph(`/me/drive/items/${d.id}/children?$select=id,name,file&$top=999`);
+      const enNube = r.value.filter(f => f.file && ES_FOTO.test(f.name) && !archivos.has(f.name));
+      for (const f of enNube) {
+        try { archivos.set(f.name, await fotoNube(f.id)); } catch (_) { faltan++; }
+      }
+      if (!archivos.size) { toast('Este registro todavía no tiene fotos.'); return; }
+      const zip = new window.JSZip();
+      [...archivos.keys()].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }))
+        .forEach(n => zip.file(n, archivos.get(n), { binary: true }));
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' }); // las fotos ya vienen comprimidas
+      bajarArchivo(blob, `${d.carpeta || d.nombre}.zip`);
+      toast(faltan ? `Se descargaron ${archivos.size} fotos; ${faltan} no se pudieron bajar (revisa la señal).` : `Se descargaron ${archivos.size} fotos.`);
+    } catch (e) {
+      console.error(e);
+      toast(errorAMensaje(e, 'descargar las fotos'));
+    } finally {
+      st.generandoZip = null; render();
+    }
   }
   // Fotos marcadas con estrella, en orden: se toman del celular si aún no se suben, o de OneDrive.
   async function fotosParaInforme(d) {
@@ -739,14 +797,7 @@
           const it = r.value.find(f => f.name === n);
           try {
             if (!it) throw new Error('no está');
-            if (DEMO) { const b = await idb.leer('demofoto.' + it.id); if (!b) throw new Error('sin archivo'); blobs.set(n, b); }
-            else if (FB) blobs.set(n, await fbFotoGrande(it.id));
-            else {
-              const meta = await graph(`/me/drive/items/${it.id}`);
-              const resp = await fetch(meta['@microsoft.graph.downloadUrl']);
-              if (!resp.ok) throw new Error('descarga');
-              blobs.set(n, await resp.blob());
-            }
+            blobs.set(n, await fotoNube(it.id));
           } catch (_) { faltan++; }
         }
       } catch (_) { faltan += restantes.length; }
@@ -767,12 +818,7 @@
       if (faltan) toast(`${faltan} ${faltan === 1 ? 'foto marcada no se pudo agregar' : 'fotos marcadas no se pudieron agregar'} (sin señal o ya no están). Puedes pegarlas en Word.`);
       const doc = window.HCInforme.crear(window.docx, d, { ...(CFG.informe || {}), fotos });
       const blob = await window.docx.Packer.toBlob(doc);
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = window.HCInforme.nombreArchivo(d);
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+      bajarArchivo(blob, window.HCInforme.nombreArchivo(d));
       setTimeout(() => toast('Informe descargado. Ábrelo en Word para revisarlo.'), faltan ? 3800 : 0);
     } catch (e) {
       console.error(e);
@@ -1205,14 +1251,14 @@
     const estrella = nombre => `<button class="star" data-act="estrella" data-n="${esc(nombre)}" aria-pressed="${marcadas.includes(nombre)}" aria-label="Usar foto ${esc(fotoNum(nombre))} en el informe">${ic('star')}</button>`;
     const tilesNube = vista.nube.slice().reverse().map(f => {
       const src = recientes.get(f.name) || f.thumb;
-      return `<div class="tile ${marcadas.includes(f.name) ? 'marcada' : ''}">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${estrella(f.name)}${quitar(f.id, 'nube', f.name)}</div>`;
+      return `<div class="tile ${marcadas.includes(f.name) ? 'marcada' : ''}" data-act="ver" data-id="${esc(f.id)}" role="button" tabindex="0" aria-label="Ver ${esc(f.name)} en grande">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${estrella(f.name)}${quitar(f.id, 'nube', f.name)}</div>`;
     });
     const tilesCola = pend.slice().reverse().map(x => {
       const badge = x.error ? `<span class="st err" title="No se pudo subir">${ic('alert')}</span>`
         : !x.listo ? `<span class="st local" title="Sin subir">Sin subir</span>`
         : x.id === subiendoId ? `<span class="st up" title="Subiendo">${ic('spin')}</span>`
         : `<span class="st wait" title="Esperando">${ic('clock')}</span>`;
-      return `<div class="tile ${x.listo ? 'pend' : 'draft'} ${marcadas.includes(x.archivo) ? 'marcada' : ''}"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${estrella(x.archivo)}${quitar(x.id, 'cola', x.archivo)}</div>`;
+      return `<div class="tile ${x.listo ? 'pend' : 'draft'} ${marcadas.includes(x.archivo) ? 'marcada' : ''}" data-act="ver" data-id="${esc(x.id)}" role="button" tabindex="0" aria-label="Ver ${esc(x.archivo)} en grande"><img src="${urlsCola.get(x.id)}" alt="${esc(x.archivo)}"><span class="num">${esc(fotoNum(x.archivo))}</span>${badge}${estrella(x.archivo)}${quitar(x.id, 'cola', x.archivo)}</div>`;
     });
     const tiles = tilesCola.concat(tilesNube);
     return `<main class="wrap">
@@ -1244,6 +1290,7 @@
       ${sugerencias(d)}
       <div class="row">
         <button class="btn primary" data-act="informe" data-id="${esc(d.id)}" ${st.generando ? 'disabled' : ''}>${st.generando === d.id ? ic('spin') + 'Preparando informe…' : ic('doc') + 'Descargar informe (Word)'}</button>
+        <button class="btn" data-act="zip" ${st.generandoZip || !tiles.length ? 'disabled' : ''}>${st.generandoZip === d.id ? ic('spin') + 'Preparando fotos…' : ic('image') + 'Descargar fotos (.zip)'}</button>
         ${SIN_ONEDRIVE ? '' : `<a class="btn" href="${esc(d.webUrl)}" target="_blank" rel="noopener">${ic('ext')}Abrir carpeta en OneDrive</a>`}
       </div>
       ${abierto ? `<button class="btn block" data-act="cerrar" ${tiles.length && !borradores && !st.ocupado ? '' : 'disabled'}>${ic('check')}Cerrar ${t.uno}</button>
@@ -1299,6 +1346,50 @@
     </div></div>`;
   }
 
+  // ---------- Visor: una foto a pantalla completa, en alta calidad ----------
+  const fotosGrandes = new Map(); // id → URL de la foto completa ya descargada
+  function listaVisor() {
+    const n = vista.nube.map(f => ({ id: f.id, nombre: f.name, tipo: 'nube', previa: recientes.get(f.name) || f.thumb }));
+    const c = pendientesDe(vista.id).map(x => ({ id: x.id, nombre: x.archivo, tipo: 'cola', previa: urlsCola.get(x.id), blob: x.blob }));
+    return [...n, ...c].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es', { numeric: true }));
+  }
+  async function verFoto(i) {
+    const lista = listaVisor();
+    if (!lista.length) { st.visor = null; render(); return; }
+    i = Math.max(0, Math.min(lista.length - 1, i));
+    const f = lista[i];
+    if (f.tipo === 'cola' && !fotosGrandes.has(f.id)) fotosGrandes.set(f.id, URL.createObjectURL(f.blob));
+    st.visor = { i, id: f.id, cargando: !fotosGrandes.has(f.id), error: false };
+    render();
+    if (!st.visor.cargando) return;
+    try {
+      const blob = await fotoNube(f.id);
+      fotosGrandes.set(f.id, URL.createObjectURL(blob));
+    } catch (_) { if (st.visor && st.visor.id === f.id) st.visor.error = true; }
+    if (st.visor && st.visor.id === f.id) { st.visor.cargando = false; render(); }
+  }
+  function vVisor() {
+    if (!st.visor) return '';
+    const lista = listaVisor();
+    const f = lista[st.visor.i];
+    if (!f) return '';
+    const num = (/(\d+)/.exec(f.nombre) || [])[1] || '';
+    const src = fotosGrandes.get(f.id) || f.previa;
+    return `<div class="review visor" role="dialog" aria-label="Foto ${esc(num)}">
+      <div class="review-top"><b>Foto ${esc(num)}</b><span class="mono">${st.visor.i + 1} de ${lista.length}</span>
+        <button class="visor-x" data-act="visorcerrar" aria-label="Cerrar">${ic('x')}</button></div>
+      <div class="review-img">
+        ${src ? `<img src="${esc(src)}" alt="${esc(f.nombre)}">` : ''}
+        ${st.visor.cargando ? `<span class="visor-carga">${ic('spin')}Cargando en alta calidad…</span>` : ''}
+        ${st.visor.error ? `<span class="visor-carga">${ic('alert')}Sin señal: se muestra la versión pequeña.</span>` : ''}
+      </div>
+      <div class="review-bar">
+        <button class="btn sec visor-nav" data-act="visorant" ${st.visor.i ? '' : 'disabled'} aria-label="Foto anterior">${ic('back')}</button>
+        <button class="btn acc" data-act="visorbajar" ${st.visor.cargando ? 'disabled' : ''}>${ic('image')}Descargar foto</button>
+        <button class="btn sec visor-nav" data-act="visorsig" ${st.visor.i < lista.length - 1 ? '' : 'disabled'} aria-label="Foto siguiente">${ic('chev')}</button>
+      </div></div>`;
+  }
+
   function vRevision() {
     const r = st.revision;
     if (r.origen === 'camara') {
@@ -1343,7 +1434,7 @@
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
     const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
-    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vMenu() + vAvisoCierre() + vEliminar();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vVisor() + vMenu() + vAvisoCierre() + vEliminar();
   }
 
   // ---------- Vista de un registro ----------
@@ -1432,6 +1523,18 @@
         break;
       }
       case 'elegir': elegirValor(b.dataset.id, b.dataset.v); break;
+      case 'ver': { const i = listaVisor().findIndex(f => f.id === b.dataset.id); if (i >= 0) verFoto(i); break; }
+      case 'visorcerrar': st.visor = null; render(); break;
+      case 'visorant': if (st.visor) verFoto(st.visor.i - 1); break;
+      case 'visorsig': if (st.visor) verFoto(st.visor.i + 1); break;
+      case 'visorbajar': {
+        if (window.HUB_DEMO) { toast('Desde este enlace no se pueden descargar archivos. Usa la app publicada en GitHub.'); break; }
+        const f = st.visor && listaVisor()[st.visor.i];
+        const url = f && fotosGrandes.get(f.id);
+        if (url) bajarArchivo(await (await fetch(url)).blob(), f.nombre);
+        break;
+      }
+      case 'zip': if (d && !st.generandoZip) descargarZip(d); break;
       case 'preeliminar': st.eliminar = d.id; render(); break;
       case 'noeliminar': if (e.target === b || b.tagName === 'BUTTON') { st.eliminar = null; render(); } break;
       case 'eliminar': {
@@ -1716,7 +1819,10 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
     if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
-    if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar)) { st.menu = false; st.sel = null; st.eliminar = null; render(); }
+    if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar || st.visor)) { st.menu = false; st.sel = null; st.eliminar = null; st.visor = null; render(); }
+    if (st.visor && e.key === 'ArrowLeft') verFoto(st.visor.i - 1);
+    if (st.visor && e.key === 'ArrowRight') verFoto(st.visor.i + 1);
+    if (e.key === 'Enter' && e.target.classList?.contains('tile')) e.target.click();
   });
 
   // ---------- Arranque ----------
