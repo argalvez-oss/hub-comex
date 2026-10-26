@@ -123,7 +123,10 @@
     logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>',
     spin: '<path d="M12 3a9 9 0 1 0 9 9"/>',
     trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>',
-    star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9z"/>'
+    star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9z"/>',
+    up: '<path d="m6 15 6-6 6 6"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" stroke-width="3.2"/>'
   };
   const ic = n => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -783,9 +786,9 @@
       st.generandoZip = null; render();
     }
   }
-  // Fotos marcadas con estrella, en orden: se toman del celular si aún no se suben, o de OneDrive.
+  // Fotos marcadas con estrella, en el orden que eligió ventas: se toman del celular si aún no se suben, o de la nube.
   async function fotosParaInforme(d) {
-    const marcadas = (d.informeFotos || []).slice().sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+    const marcadas = (d.informeFotos || []).slice();
     const blobs = new Map();
     for (const x of pendientesDe(d.id)) if (marcadas.includes(x.archivo)) blobs.set(x.archivo, x.blob);
     let faltan = 0;
@@ -1247,8 +1250,13 @@
         <button class="no" data-act="noborrar">Cancelar</button></div>`;
       return `<button class="del" data-act="preborrar" data-id="${esc(id)}" aria-label="Eliminar foto ${esc(fotoNum(nombre))}">${ic('x')}</button>`;
     };
-    // Estrella: la foto va al informe.
-    const estrella = nombre => `<button class="star" data-act="estrella" data-n="${esc(nombre)}" aria-pressed="${marcadas.includes(nombre)}" aria-label="Usar foto ${esc(fotoNum(nombre))} en el informe">${ic('star')}</button>`;
+    // Estrella: la foto va al informe. Marcada, muestra su número de orden en el informe.
+    const estrella = nombre => {
+      const pos = marcadas.indexOf(nombre) + 1;
+      return pos
+        ? `<button class="star" data-act="estrella" data-n="${esc(nombre)}" aria-pressed="true" aria-label="Foto ${pos} del informe. Tocar para quitarla"><b>${pos}</b></button>`
+        : `<button class="star" data-act="estrella" data-n="${esc(nombre)}" aria-pressed="false" aria-label="Usar foto ${esc(fotoNum(nombre))} en el informe">${ic('star')}</button>`;
+    };
     const tilesNube = vista.nube.slice().reverse().map(f => {
       const src = recientes.get(f.name) || f.thumb;
       return `<div class="tile ${marcadas.includes(f.name) ? 'marcada' : ''}" data-act="ver" data-id="${esc(f.id)}" role="button" tabindex="0" aria-label="Ver ${esc(f.name)} en grande">${src ? `<img src="${esc(src)}" alt="${esc(f.name)}" loading="lazy">` : `<div class="ph">${ic('image')}</div>`}<span class="num">${esc(fotoNum(f.name))}</span><span class="st ok" title="Subida">${ic('check')}</span>${estrella(f.name)}${quitar(f.id, 'nube', f.name)}</div>`;
@@ -1280,7 +1288,8 @@
       ${cajaSubida(d)}
       <section class="list">
         <div class="sec-h"><h2>Fotos</h2><span class="count">${tiles.length} · <span class="cnt-star">${ic('star')} ${marcadas.length} para el informe</span></span></div>
-        ${tiles.length ? `<p class="help">Toca la estrella en las fotos que van al informe.</p>` : ''}
+        ${tiles.length ? `<p class="help">Toca la estrella en las fotos que van al informe. El número es el orden en que saldrán.</p>` : ''}
+        ${marcadas.length > 1 ? `<button class="btn" data-act="ordenar">${ic('grip')}Ordenar fotos del informe</button>` : ''}
         ${vista.error ? `<div class="note bad">${ic('alert')}<span>${esc(vista.error)} <button class="link" data-act="recargarvista">Reintentar</button></span></div>` : ''}
         ${tiles.length ? `<div class="grid">${tiles.join('')}</div>`
           : vista.cargando ? `<p class="loading">${ic('spin')}Cargando fotos…</p>`
@@ -1345,6 +1354,83 @@
       <button class="btn block" data-act="cerraraviso">Volver y completar</button>
     </div></div>`;
   }
+
+  // ---------- Ordenar las fotos del informe: arrastrar o flechas ----------
+  function vOrdenar() {
+    const d = st.ordenar && buscar(st.ordenar);
+    if (!d) return '';
+    const fotos = new Map(listaVisor().map(f => [f.nombre, f]));
+    const marcadas = (d.informeFotos || []).filter(n => fotos.has(n));
+    const items = marcadas.map((n, i) => {
+      const f = fotos.get(n);
+      const num = (/(\d+)/.exec(n) || [])[1] || '';
+      return `<li class="ord-item" data-n="${esc(n)}">
+        <span class="ord-handle" aria-label="Arrastrar para mover">${ic('grip')}</span>
+        ${f.previa ? `<img src="${esc(f.previa)}" alt="">` : `<div class="ph">${ic('image')}</div>`}
+        <span class="ord-txt"><b class="ord-pos">Foto ${i + 1}</b><small>Toma ${esc(num)}</small></span>
+        <button class="btn sec ord-btn" data-act="ordmover" data-n="${esc(n)}" data-d="-1" ${i ? '' : 'disabled'} aria-label="Subir">${ic('up')}</button>
+        <button class="btn sec ord-btn" data-act="ordmover" data-n="${esc(n)}" data-d="1" ${i < marcadas.length - 1 ? '' : 'disabled'} aria-label="Bajar">${ic('down')}</button>
+      </li>`;
+    }).join('');
+    return `<div class="sheet-bg" data-act="ordlisto"><div class="sheet sheet-ord" data-stop>
+      <span class="eyebrow">Fotos del informe</span>
+      <h2 style="font-size:20px">Ordenar fotos</h2>
+      <p class="help">Arrastra desde ${ic('grip')} o usa las flechas. En el informe van de 2 en 2: la 1 y la 2 en la primera fila, la 3 y la 4 en la siguiente…</p>
+      <ul class="ord-lista">${items}</ul>
+      <button class="btn block primary" data-act="ordlisto">${ic('check')}Listo</button>
+    </div></div>`;
+  }
+  function guardarOrden(d, lista) {
+    // Se conservan al final las marcadas que no están en pantalla (por si alguna aún no carga).
+    const resto = (d.informeFotos || []).filter(n => !lista.includes(n));
+    guardarDetalles(d.id, { informeFotos: lista.concat(resto) });
+  }
+  // Arrastre con el dedo o el mouse, solo desde la manija (así la lista se puede desplazar normal).
+  let arrastre = null;
+  document.addEventListener('pointerdown', e => {
+    const h = e.target.closest('.ord-handle');
+    if (!h) return;
+    const li = h.closest('.ord-item');
+    e.preventDefault();
+    try { h.setPointerCapture(e.pointerId); } catch (_) {}
+    arrastre = { li, lista: li.parentElement, id: e.pointerId, y0: e.clientY };
+    li.classList.add('arrastrando');
+    st.arrastrando = true;
+  });
+  document.addEventListener('pointermove', e => {
+    if (!arrastre || e.pointerId !== arrastre.id) return;
+    e.preventDefault();
+    const { li, lista } = arrastre;
+    const mover = vecino => { const antes = li.offsetTop; lista.insertBefore(vecino, vecino === li.nextElementSibling ? li : vecino.nextElementSibling); arrastre.y0 += li.offsetTop - antes; };
+    for (let n = 0; n < 50; n++) {
+      li.style.transform = `translateY(${e.clientY - arrastre.y0}px)`;
+      const r = li.getBoundingClientRect(), medio = r.top + r.height / 2;
+      const sig = li.nextElementSibling, ant = li.previousElementSibling;
+      if (sig && medio > sig.getBoundingClientRect().top + sig.offsetHeight / 2) mover(sig);
+      else if (ant && medio < ant.getBoundingClientRect().top + ant.offsetHeight / 2) {
+        const antes = li.offsetTop; lista.insertBefore(li, ant); arrastre.y0 += li.offsetTop - antes;
+      } else break;
+    }
+    lista.querySelectorAll('.ord-pos').forEach((b, i) => { b.textContent = `Foto ${i + 1}`; });
+    // Si el dedo llega al borde de la lista, la lista se desplaza sola.
+    const caja = lista.getBoundingClientRect();
+    if (e.clientY < caja.top + 30) lista.scrollTop -= 12;
+    else if (e.clientY > caja.bottom - 30) lista.scrollTop += 12;
+  }, { passive: false });
+  const soltar = e => {
+    if (!arrastre || e.pointerId !== arrastre.id) return;
+    const { li, lista } = arrastre;
+    arrastre = null;
+    li.style.transform = '';
+    li.classList.remove('arrastrando');
+    st.arrastrando = false;
+    const d = buscar(st.ordenar);
+    if (d) guardarOrden(d, [...lista.querySelectorAll('.ord-item')].map(x => x.dataset.n));
+    render();
+  };
+  document.addEventListener('pointerup', soltar);
+  document.addEventListener('pointercancel', soltar);
+  document.addEventListener('lostpointercapture', soltar); // por si el celular interrumpe el toque
 
   // ---------- Visor: una foto a pantalla completa, en alta calidad ----------
   const fotosGrandes = new Map(); // id → URL de la foto completa ya descargada
@@ -1429,12 +1515,12 @@
 
   function render() {
     const v = st.view;
-    if (v === 'boot') return;
+    if (v === 'boot' || st.arrastrando) return; // mientras se arrastra una foto no se redibuja (se redibuja al soltar)
     if (v === 'ingreso') { app.innerHTML = vIngreso(); return; }
     if (v === 'sinacceso') { app.innerHTML = vSinAcceso(); return; }
     if (v === 'falla') { app.innerHTML = vFalla(); return; }
     const cuerpo = v === 'nuevo' ? vNuevo() : v === 'despacho' ? vDespacho() : v === 'registros' ? vRegistros() : v === 'modulo' ? vModulo() : vAreas();
-    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vVisor() + vMenu() + vAvisoCierre() + vEliminar();
+    app.innerHTML = encabezado(v === 'registros' || v === 'areas') + cuerpo + barra() + (st.revision ? vRevision() : '') + vVisor() + vOrdenar() + vMenu() + vAvisoCierre() + vEliminar();
   }
 
   // ---------- Vista de un registro ----------
@@ -1535,6 +1621,19 @@
         break;
       }
       case 'zip': if (d && !st.generandoZip) descargarZip(d); break;
+      case 'ordenar': if (d) { st.ordenar = d.id; render(); } break;
+      case 'ordlisto': if (e.target === b || b.tagName === 'BUTTON') { st.ordenar = null; render(); } break;
+      case 'ordmover': {
+        const x = buscar(st.ordenar);
+        if (!x) break;
+        const enPantalla = [...document.querySelectorAll('.ord-item')].map(li => li.dataset.n);
+        const i = enPantalla.indexOf(b.dataset.n), j = i + +b.dataset.d;
+        if (i < 0 || j < 0 || j >= enPantalla.length) break;
+        [enPantalla[i], enPantalla[j]] = [enPantalla[j], enPantalla[i]];
+        guardarOrden(x, enPantalla);
+        render();
+        break;
+      }
       case 'preeliminar': st.eliminar = d.id; render(); break;
       case 'noeliminar': if (e.target === b || b.tagName === 'BUTTON') { st.eliminar = null; render(); } break;
       case 'eliminar': {
@@ -1819,7 +1918,7 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('nuevo-')) document.getElementById('crear').click();
     if (e.key === 'Enter' && (e.target.id?.startsWith('det-') || e.target.dataset?.obs)) e.target.blur();
-    if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar || st.visor)) { st.menu = false; st.sel = null; st.eliminar = null; st.visor = null; render(); }
+    if (e.key === 'Escape' && (st.menu || st.sel || st.eliminar || st.visor || st.ordenar)) { st.menu = false; st.sel = null; st.eliminar = null; st.visor = null; st.ordenar = null; render(); }
     if (st.visor && e.key === 'ArrowLeft') verFoto(st.visor.i - 1);
     if (st.visor && e.key === 'ArrowRight') verFoto(st.visor.i + 1);
     if (e.key === 'Enter' && e.target.classList?.contains('tile')) e.target.click();
